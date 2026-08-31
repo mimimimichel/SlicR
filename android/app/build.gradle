@@ -1,0 +1,73 @@
+plugins {
+    id 'com.android.application'
+}
+
+/*
+ * The web app is the single source of truth: it lives at the repository root.
+ * Rather than duplicating it here, the build copies exactly the files index.html
+ * needs into the APK's assets, so the app and the page can never drift apart.
+ */
+def repoRoot = rootProject.file("..")
+def webAppOut = layout.buildDirectory.dir("generated/webapp")
+
+tasks.register('bundleWebApp', Copy) {
+    description = 'Copies the browser slicer into assets/www for offline use.'
+    into webAppOut.map { it.dir("www") }
+
+    from(repoRoot) {
+        include 'index.html'
+    }
+    from(repoRoot) {
+        include 'styles/main.css'
+        include 'styles/slicer.css'
+        include 'js/slicer/**'
+        include 'js/vendor/**'
+    }
+
+    doLast {
+        def entry = webAppOut.get().dir("www").file("index.html").asFile
+        if (!entry.exists()) throw new GradleException("index.html was not bundled — check repoRoot")
+    }
+}
+
+android {
+    namespace 'com.odpsstudio.webslicer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.odpsstudio.webslicer"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs += webAppOut
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs.useLegacyPackaging false
+    }
+}
+
+tasks.withType(com.android.build.gradle.tasks.MergeSourceSetFolders).configureEach {
+    dependsOn 'bundleWebApp'
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+}

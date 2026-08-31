@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>SlicR — slice STL &amp; 3MF to G-code in your browser</title>
+<meta name="description" content="An Orca-style 3D print slicer that runs entirely in your browser. Load an STL, 3MF or OBJ, tune walls, infill and supports, preview every layer and export G-code. Works on tablets."/>
+<meta name="theme-color" content="#06080d"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236366f1'/%3E%3Cpath d='M6 21l10-6 10 6-10 6z' fill='white' opacity='.95'/%3E%3Cpath d='M6 15l10-6 10 6-10 6z' fill='white' opacity='.55'/%3E%3C/svg%3E"/>
+<link rel="stylesheet" href="styles/main.css"/>
+<link rel="stylesheet" href="styles/slicer.css"/>
+</head>
+<body class="slicer-app">
+
+<div class="sl-shell">
+
+  <header class="sl-topbar" id="topbar">
+    <span class="sl-brand">
+      <span class="sl-logo">🧊</span>
+      <span>
+        <span class="full">SlicR</span>
+        <small>STL → G-code</small>
+      </span>
+    </span>
+
+    <button class="sl-btn" id="btn-open" type="button">📂 <span class="full">Open</span></button>
+    <input type="file" id="file-input" accept=".stl,.3mf,.obj,model/stl,model/3mf" multiple hidden/>
+    <input type="file" id="profile-input" accept=".json,application/json" hidden/>
+
+    <div class="sl-spacer"></div>
+
+    <div class="sl-presets" id="presets">
+      <select class="sl-select" id="sel-printer" aria-label="Printer"></select>
+      <select class="sl-select" id="sel-filament" aria-label="Filament"></select>
+      <select class="sl-select" id="sel-quality" aria-label="Quality"></select>
+    </div>
+
+    <button class="sl-btn icon" id="btn-panel" type="button" aria-label="Settings" title="Settings">⚙️</button>
+    <button class="sl-btn primary" id="btn-slice" type="button" disabled>Slice</button>
+    <button class="sl-btn" id="btn-export" type="button" disabled title="Download G-code">⬇︎ <span class="full">G-code</span></button>
+  </header>
+
+  <div class="sl-stage" id="stage">
+    <canvas id="sl-canvas"></canvas>
+
+    <div class="sl-tools">
+      <button class="sl-btn icon on" id="tool-orbit" type="button" title="Orbit / select">🔄</button>
+      <button class="sl-btn icon" id="tool-move" type="button" title="Drag models on the plate">✋</button>
+      <button class="sl-btn icon" id="tool-face" type="button" title="Tap a face to lay it flat">⬓</button>
+      <button class="sl-btn icon" id="tool-paint" type="button" title="Paint supports and seams">🖌</button>
+      <button class="sl-btn icon" id="tool-arrange" type="button" title="Auto-arrange">⊞</button>
+      <button class="sl-btn icon" id="tool-delete" type="button" title="Delete selected">🗑</button>
+      <button class="sl-btn icon" id="tool-preview" type="button" title="Toggle model / preview" disabled>👁</button>
+    </div>
+
+    <div class="sl-paint" id="paint-palette" hidden>
+      <div class="sl-paint-kinds">
+        <button class="sl-btn on" data-paint="enforce" type="button" title="Force support under this spot">
+          <span class="sl-dot enforce"></span> Support here</button>
+        <button class="sl-btn" data-paint="block" type="button" title="Keep support away from this spot">
+          <span class="sl-dot block"></span> No support</button>
+        <button class="sl-btn" data-paint="seam" type="button" title="Put the seam on this face">
+          <span class="sl-dot seam"></span> Seam</button>
+        <button class="sl-btn" data-paint="erase" type="button" title="Remove marks">
+          <span class="sl-dot erase"></span> Erase</button>
+      </div>
+      <label class="sl-paint-size">Brush
+        <input type="range" id="paint-size" min="0.5" max="12" step="0.5" value="3">
+        <span id="paint-size-value">3 mm</span>
+      </label>
+      <div class="sl-paint-foot">
+        <span id="paint-count">nothing painted</span>
+        <button class="sl-btn" id="paint-clear" type="button" disabled>Clear</button>
+      </div>
+      <p class="sl-paint-hint">Tap the model to paint, tap a mark to remove it.</p>
+    </div>
+
+    <div class="sl-views">
+      <button class="sl-btn" data-view="iso" type="button">Iso</button>
+      <button class="sl-btn" data-view="top" type="button">Top</button>
+      <button class="sl-btn" data-view="front" type="button">Front</button>
+      <button class="sl-btn" data-view="left" type="button">Left</button>
+    </div>
+
+    <div class="sl-empty" id="empty">
+      <h2>Drop a model to start</h2>
+      <p>STL, 3MF or OBJ — everything is sliced locally in your browser. Nothing is uploaded.</p>
+      <div class="sl-empty-actions">
+        <button class="sl-btn primary" id="btn-open2" type="button">Choose a file</button>
+        <button class="sl-btn" data-demo="cube" type="button">20 mm cube</button>
+        <button class="sl-btn" data-demo="cylinder" type="button">Tube</button>
+        <button class="sl-btn" data-demo="pyramid" type="button">Pyramid</button>
+      </div>
+    </div>
+
+    <div class="sl-drop" id="dropzone">Release to load</div>
+
+    <div class="sl-progress" id="progress">
+      <span id="progress-label">Slicing…</span>
+      <span class="bar"><i id="progress-bar"></i></span>
+    </div>
+
+    <div class="sl-layers" id="layers">
+      <div class="sl-layer-num"><b id="layer-num">0</b><span id="layer-z">0.00 mm</span></div>
+      <div class="sl-range-wrap"><input type="range" class="sl-vrange" id="layer-range" min="0" max="0" value="0" aria-label="Layer"/></div>
+      <button class="sl-btn icon" id="btn-single" type="button" title="Show only this layer">≡</button>
+      <button class="sl-btn icon" id="btn-travels" type="button" title="Show travel moves">↔</button>
+    </div>
+
+    <div class="sl-legend" id="legend"></div>
+    <div class="sl-stats" id="stats"></div>
+    <button class="sl-check-status" id="check-status" type="button"></button>
+
+    <div class="sl-backdrop" id="backdrop"></div>
+
+    <aside class="sl-panel" id="panel">
+      <div class="sl-panel-head">
+        <h3 id="panel-title">Print settings</h3>
+        <button class="sl-btn icon ghost" id="btn-panel-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="sl-tabs">
+        <button class="sl-tab active" data-tab="print" type="button">Print</button>
+        <button class="sl-tab" data-tab="object" type="button">Object</button>
+        <button class="sl-tab" data-tab="machine" type="button">Machine</button>
+        <button class="sl-tab" data-tab="check" type="button" id="tab-check">Check</button>
+      </div>
+      <div class="sl-panel-body" id="panel-body"></div>
+    </aside>
+  </div>
+</div>
+
+<script src="js/vendor/three.min.js"></script>
+<script src="js/slicer/presets.js"></script>
+<script src="js/slicer/gcodecheck.js"></script>
+<script src="js/slicer/loaders.js"></script>
+<script src="js/slicer/viewer.js"></script>
+<script src="js/slicer/app.js"></script>
+</body>
+</html>
