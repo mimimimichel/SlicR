@@ -2,6 +2,7 @@ globalThis.ClipperLib = require('./js/vendor/clipper.js');
 globalThis.OrcaPresets = require('./js/slicer/presets.js');
 require('./js/slicer/engine.js');
 require('./js/slicer/beading.js');
+require('./js/slicer/template.js');
 var C = require('./js/slicer/gcodecheck.js');
 var E = globalThis.OrcaEngine, P = globalThis.OrcaPresets;
 

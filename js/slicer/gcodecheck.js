@@ -131,6 +131,11 @@
     var maxVolumetric = s.maxVolumetric || 0;
     var maxFeed = (s.maxSpeed || 0) * 60;
     var MARGIN = 1.0;          // mm of slack before a coordinate counts as off-bed
+    var VENDOR_MARGIN = 15;    // how far a machine's own script may reach past it
+    // What the head can physically reach, when the profile knows. It is wider
+    // than the print area on most machines — there is plate in front of the
+    // printable square to purge on, and room behind it to present the part.
+    var reach = s.bedReach && s.bedReach.length === 4 ? s.bedReach : null;
 
     // X/Y limits in the coordinate system the file actually uses.
     var minX = centre ? -bedX / 2 : 0, maxX = centre ? bedX / 2 : bedX;
@@ -144,7 +149,7 @@
       nozzleTarget: 0, bedTarget: 0, chamberTarget: 0,
       hotendReady: false, bedReady: false,
       extruded: false, lastExtrudeZ: -Infinity,
-      inBody: false, lastLayerZ: -Infinity,
+      inBody: false, inEnd: false, lastLayerZ: -Infinity,
       macroSeen: false, endMacroSeen: false,
       heaterOffNozzle: false, heaterOffBed: false,
       lastExtrudeLine: 0, totalE: 0, bodyE: 0,
@@ -201,6 +206,8 @@
           st.inBody = true;
           st.lastExtrudeZ = -Infinity;
         }
+        // Past this the file is running the machine's own end script again.
+        if (/^;\s*END[_ ]?GCODE\b/i.test(raw)) st.inEnd = true;
         // Printing one object at a time: the previous object is now a fixed
         // obstacle standing on the plate, and Z legitimately goes back to the
         // bed for the next one.
@@ -514,7 +521,9 @@
           checkPointInBed(arcExtremes[ae][0], arcExtremes[ae][1], lineNo, raw, true);
         }
       }
-      if (nx !== null && ny !== null && bedX && bedY) {
+      // Only where the head actually goes somewhere: a Z-only or feed-only move
+      // holds the last X/Y, and reporting it again says nothing new.
+      if (nx !== null && ny !== null && bedX && bedY && (nx !== st.x || ny !== st.y)) {
         checkPointInBed(nx, ny, lineNo, raw, false);
       }
       if (nz !== null && bedZ) {
@@ -530,7 +539,10 @@
       // A layer change sent at XY travel speed asks a leadscrew for something it
       // cannot deliver. Firmware usually clamps it; where it does not, the axis
       // loses steps and every later layer is printed at the wrong height.
-      if (nz !== null && st.z !== null && st.feed > 0) {
+      // Not inside the machine's own start and end scripts: those park and
+      // present at feedrates the firmware clamps to the axis, and the numbers
+      // are the machine maker's to choose. Inside the print they are ours.
+      if (nz !== null && st.z !== null && st.feed > 0 && st.inBody && !st.inEnd) {
         var dz = Math.abs(nz - st.z);
         if (dz > 0.001) {
           var dxy = Math.hypot((nx || 0) - (st.x || 0), (ny || 0) - (st.y || 0));
@@ -723,18 +735,46 @@
     function checkPointInBed(px, py, lineNo, raw, isArcPoint) {
       if (px === null || py === null || !bedX || !bedY) return;
       var where = isArcPoint ? 'The arc passes through X' : 'Move to X';
+      // Before the first layer and after the last, the file is running the
+      // machine's own start and end scripts, and plenty of machines use room
+      // the print area does not have: Elegoo purges on the lip in front of the
+      // plate and slides the bed out past its own front edge to present the
+      // part. That is the profile doing its job — worth saying, not worth
+      // refusing. A gross excursion is still a crash either way.
+      var vendor = !st.inBody || st.inEnd;
+      // Where the profile states the machine's reach, that is the answer inside
+      // its own scripts: within it, nothing to say; outside it, a crash.
+      if (vendor && reach) {
+        if (px < reach[0] - MARGIN || px > reach[2] + MARGIN ||
+            py < reach[1] - MARGIN || py > reach[3] + MARGIN) {
+          add(ERROR, 'bounds.xy',
+            where + round(px) + ' Y' + round(py) + ', outside what this machine can reach (X ' +
+            round(reach[0]) + '–' + round(reach[2]) + ', Y ' + round(reach[1]) + '–' + round(reach[3]) + ')',
+            lineNo, raw, 'The head would be driven into the frame or an end stop.');
+        }
+        return;
+      }
+      var slack = vendor ? VENDOR_MARGIN : MARGIN;
+      var sev = vendor ? WARN : ERROR;
+      var code = vendor ? 'bounds.xy.script' : 'bounds.xy';
       if (circular) {
         var cx = centre ? 0 : bedX / 2, cy = centre ? 0 : bedY / 2;
         var r = Math.hypot(px - cx, py - cy);
         if (r > radius + MARGIN) {
-          add(ERROR, 'bounds.xy',
+          if (r > radius + slack) { sev = ERROR; code = 'bounds.xy'; }
+          add(sev, code,
             where + round(px) + ' Y' + round(py) + ', ' + round(r - radius) + ' mm outside the ' + round(radius * 2) + ' mm plate',
             lineNo, raw);
         }
       } else if (px < minX - MARGIN || px > maxX + MARGIN || py < minY - MARGIN || py > maxY + MARGIN) {
-        add(ERROR, 'bounds.xy',
+        if (px < minX - slack || px > maxX + slack || py < minY - slack || py > maxY + slack) {
+          sev = ERROR; code = 'bounds.xy';
+        }
+        add(sev, code,
           where + round(px) + ' Y' + round(py) + ', outside the bed (X ' + round(minX) + '–' + round(maxX) + ', Y ' + round(minY) + '–' + round(maxY) + ')',
-          lineNo, raw, 'The head would be driven into the frame or an end stop.');
+          lineNo, raw, sev === ERROR
+            ? 'The head would be driven into the frame or an end stop.'
+            : 'Normal for a machine that purges or presents off the print area; check it against yours.');
       }
     }
 

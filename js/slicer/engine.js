@@ -2623,6 +2623,18 @@
    * the language loaded the old placeholders still resolve, because a start
    * script that silently loses its temperatures is a cold-extrusion crash.
    */
+  // Under Node the modules are pulled in one by one, and a suite that forgets
+  // the template renderer would otherwise write '{max_z + 0.5}' into a real
+  // file. In the browser and the worker it is already loaded by the time this
+  // runs; either way, the engine does not emit a command it cannot fill in.
+  function templateEngine() {
+    if (root.OrcaTemplate) return root.OrcaTemplate;
+    if (typeof require === 'function') {
+      try { root.OrcaTemplate = require('./template.js'); } catch (e) { /* browser */ }
+    }
+    return root.OrcaTemplate;
+  }
+
   function renderTemplate(text, s, extra) {
     if (!text) return '';
     var vars = {};
@@ -2646,7 +2658,8 @@
     }
     vars.z = extra && extra.layer_z !== undefined ? extra.layer_z : 0;
 
-    if (root.OrcaTemplate) return root.OrcaTemplate.render(text, vars);
+    var tpl = templateEngine();
+    if (tpl) return tpl.render(text, vars);
     return String(text).replace(/\{([a-z_][a-z0-9_]*)\}/g, function (whole, name) {
       return Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : whole;
     });
@@ -3484,7 +3497,7 @@
     out.push('M82 ; absolute extrusion');
     out.push('G92 E0');
 
-    out.push(renderTemplate(s.startGcode, s, {}));
+    out.push(renderTemplate(s.startGcode, s, { total_layers: layers.length }));
 
     if (s.chamberTemp > 0) { out.push('M141 S' + s.chamberTemp + ' ; chamber'); }
     // Asserted again: a machine's own start macro is free to leave either mode
@@ -3567,7 +3580,7 @@
       if (s.layerGcode) {
         out.push(renderTemplate(s.layerGcode, s, {
           layer: Li, layer_num: Li, layer_z: layer.z,
-          object_layer: Lo, layer_height: layer.h
+          object_layer: Lo, layer_height: layer.h, total_layers: layers.length
         }));
       }
 
@@ -3666,7 +3679,10 @@
 
     // --- footer ------------------------------------------------------------
     out.push(';END');
-    out.push(renderTemplate(s.endGcode, s, { max_z: printedTopZ }));
+    // Marks where the machine's own script takes over again, so a reader — the
+    // verifier included — can tell the part's moves from the machine's.
+    out.push(';END_GCODE');
+    out.push(renderTemplate(s.endGcode, s, { max_z: printedTopZ, total_layers: layers.length }));
 
     var seconds = estimateTime(moves, s.maxAccel);
     var volume = extrudedVolume;

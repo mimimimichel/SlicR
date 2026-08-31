@@ -84,6 +84,41 @@
       'G92 E0'
     ].join('\n'),
 
+    // Elegoo Centauri Carbon. Transliterated from Elegoo's own machine G-code in
+    // the OrcaSlicer profile they maintain, because this machine does not have
+    // the START_PRINT macro the DIY Klipper builds do, and the generic script is
+    // wrong for it in two ways that both end with the nozzle on the plate: it
+    // never calls M729, the firmware routine that wipes the nozzle and applies
+    // the stored Z offset and mesh, and it purges on the print area instead of
+    // the strip in front of it.
+    centauri: [
+      ';===== Elegoo Centauri Carbon =====',
+      'M400 ; let the buffer drain before touching anything',
+      'M220 S100 ; feed rate back to 100%',
+      'M221 S100 ; flow rate back to 100%',
+      'M104 S140 ; warm, but not hot enough to drool while homing',
+      'M140 S{bed_temp}',
+      'G90',
+      'M83',
+      'G28 ; home',
+      'M729 ; clean the nozzle, load the mesh and the Z offset',
+      'M190 S{bed_temp} ; wait for the bed',
+      'M109 S{nozzle_temp} ; wait for the nozzle',
+      'SET_PRINT_STATS_INFO TOTAL_LAYER={total_layers} CURRENT_LAYER=0',
+      'G1 X{bed_x_half} Y-1.2 F20000',
+      'G1 Z0.3 F900',
+      'G92 E0',
+      'G1 F1200',
+      'G1 X0 E10.156 ; purge line, on the lip in front of the plate',
+      'G1 Y98.8 E7.934',
+      'G1 X0.9 Y100 E0.1',
+      'G1 Y-0.3 E7.934',
+      'G1 X{purge_end} E6.284',
+      'G3 I-1 J0 Z0.6 F1200 ; curl off the line rather than drag through it',
+      'G1 F20000',
+      'G92 E0'
+    ].join('\n'),
+
     delta: [
       'M140 S{bed_temp}',
       'M104 S{nozzle_temp}',
@@ -117,6 +152,33 @@
       'M104 S0',
       'M140 S0',
       'M107'
+    ].join('\n'),
+
+    centauri: [
+      ';===== Elegoo Centauri Carbon =====',
+      'M400',
+      'M140 S0 ; bed off',
+      'M106 S255 ; blow on the nozzle while it comes down',
+      'M83',
+      'G92 E0',
+      'G1 E-0.8 F1800 ; retract',
+      'G2 I1 J0 Z{max_z + 0.5} F3000 ; curl away from the part',
+      'G90',
+      'G1 Z{min(max_z + 50, bed_z - 0.5)} F20000 ; get the head clear',
+      'M204 S5000',
+      'M749 ; park the toolhead the way the firmware wants it',
+      'M400',
+      'G1 X202 F20000',
+      'G1 Y250 F20000',
+      'G1 Y264.5 F1200 ; present the plate',
+      'M400',
+      'G92 E0',
+      'M104 S0 ; nozzle off',
+      'M140 S0 ; bed off',
+      'M106 S0 ; part fan off',
+      'M106 P2 S0 ; auxiliary fan off',
+      'M106 P3 S0 ; chamber fan off',
+      'M84 ; motors off'
     ].join('\n'),
 
     delta: [
@@ -162,6 +224,11 @@
       // nozzle is in the beam's path; a corexy or delta head moves over the
       // plate and only the extruder body is in the way.
       kinematics: opts.kinematics || (shape === 'circle' ? 'delta' : 'bedslinger'),
+      // How far the head really reaches, [minX, minY, maxX, maxY], where the
+      // machine's own scripts step outside the print area — purging on the lip
+      // in front of the plate, sliding the bed out to hand the part over. Left
+      // unset, the print area is all that is assumed to exist.
+      reach: opts.reach || null,
       extruders: opts.extruders || 1,
       nozzle: opts.nozzle || 0.4,
       filamentDiameter: opts.filamentDiameter || 1.75,
@@ -172,9 +239,12 @@
       retractSpeed: opts.retractSpeed || 40,
       zHop: opts.zHop != null ? opts.zHop : 0.2,
       maxSpeed: opts.maxSpeed || 300,
+      layerGcode: opts.layerGcode || '',
       startGcode: start
         .replace(/\{prime_end\}/g, Math.max(40, Math.round(by * 0.8)))
         .replace(/\{prime_radius\}/g, Math.round(bx / 2 - 12))
+        .replace(/\{bed_x_half\}/g, Math.round(bx / 2))
+        .replace(/\{purge_end\}/g, Math.round(bx / 2 - 50))
         .replace(/\{z_feed\}/g, zFeed),
       endGcode: end
         .replace(/\{present_y\}/g, Math.max(10, Math.round(by - 20)))
@@ -184,13 +254,19 @@
 
   var PRINTERS = {
     // --- Elegoo ---
-    // Klipper, like every other machine of its generation here. It was the one
-    // profile left on the generic Marlin start script, which homes and then goes
-    // straight to the first layer height without the machine's own start macro —
-    // so no bed mesh and no saved Z offset, and the nozzle drags on the plate.
+    // Klipper, like every other machine of its generation here, and with its own
+    // start and end scripts: it was the one profile left on the generic Marlin
+    // script, which homes and then goes straight to the first layer height
+    // without the machine's own routine — so no nozzle wipe, no mesh, no saved
+    // Z offset, and the nozzle drags on the plate.
     centauri_carbon: printer('Elegoo Centauri Carbon', 'Elegoo', 256, 256, 256,
       { kinematics: 'corexy', accel: 8000, travel: 300, retract: 0.8, retractSpeed: 40,
-        flavor: 'klipper', start: 'klipper', end: 'klipper',
+        flavor: 'klipper', start: 'centauri', end: 'centauri',
+        // Elegoo's own scripts purge on the strip in front of the plate and run
+        // the bed out to Y264.5 to present the print.
+        reach: [-2, -3, 256, 266],
+        // The screen's layer counter reads this, not the ;LAYER comments.
+        layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
         maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
     elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 225, 225, 265,
       { accel: 4000, travel: 250, retract: 1.0, start: 'mesh', flavor: 'klipper' }),
@@ -413,6 +489,7 @@
       extruderClearanceRadius: p.clearanceRadius || 45,
       extruderClearanceHeight: p.clearanceHeight || 25,
       kinematics: p.kinematics,
+      bedReach: p.reach || null,
       extruderCount: p.extruders,
       // What a fresh tool has to push out before it can be trusted to lay a
       // clean line: the old colour is still sitting in the melt zone.
@@ -437,7 +514,7 @@
       zHop: p.zHop,
       startGcode: p.startGcode,
       endGcode: p.endGcode,
-      layerGcode: '',
+      layerGcode: p.layerGcode || '',
       relativeE: false,
       emitAcceleration: true,
       thumbnails: true,
