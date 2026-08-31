@@ -118,5 +118,35 @@ if (okModes.findings.some(function (f) { return f.code === 'mode.unset'; })) {
   fail++; console.log('  FALSE ALARM: mode.unset raised on a file that sets G90 first');
 } else { pass++; console.log('  ok      G90 before the first move is not flagged'); }
 
+// --- commands that name an axis without a value are not malformed ---
+// 'G28 Z' homes Z alone; 'M84 X Y E' releases three motors and leaves Z holding.
+var bare = C.verify(['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200',
+  'G28', 'G28 Z', ';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200',
+  'M104 S0', 'M140 S0', 'M84 X Y E'].join('\n'), base.settings);
+if (bare.findings.some(function (f) { return f.code === 'malformed'; })) {
+  fail++; console.log('  FALSE ALARM: a bare axis letter read as a missing value');
+} else { pass++; console.log('  ok      G28 Z and M84 X Y E are read as written'); }
+
+// --- SET_KINEMATIC_POSITION moves the coordinates, not the head ---
+// A machine reaches a wiper past the end of its bed by renaming where it is.
+// Read literally, the moves after it look like a leap across the plate.
+var kin = C.verify(['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200',
+  'G28', 'G1 X225 Y205 F5000', 'SET_KINEMATIC_POSITION Y=0', 'G1 Y15 F4000',
+  ';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200',
+  'M104 S0', 'M140 S0'].join('\n'), base.settings);
+if (kin.errors === 0) { pass++; console.log('  ok      SET_KINEMATIC_POSITION is followed, not read as a move'); }
+else { fail++; console.log('  FALSE ALARM on a re-based coordinate system:',
+  kin.findings.filter(function (f) { return f.severity === 'error'; })[0].code); }
+
+// --- the declared reach is a limit, not a licence ---
+// A machine may purge in front of its plate; it may not drive into the frame.
+var reachSettings = P.buildSettings('centauri_carbon', 'pla', 'q020');
+expectCatch('a start script beyond what the machine reaches',
+  ['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200',
+   'G28', 'G1 X128 Y-1.2 F20000', 'G1 X128 Y-40 F20000',
+   ';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200',
+   'M104 S0', 'M140 S0'].join('\n'),
+  reachSettings, 'bounds.xy', 'error');
+
 console.log('\n'+pass+' passed, '+fail+' failed');
 process.exit(fail?1:0);

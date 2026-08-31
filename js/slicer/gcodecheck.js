@@ -108,6 +108,14 @@
 
     // Whatever the tokeniser could not account for is a parameter we failed to read.
     var leftover = rest.replace(wordRegex(), '').replace(/\s+/g, '');
+    // Except on the handful of commands that name axes without a value —
+    // 'G28 Z' homes Z alone, 'M84 X Y E' releases three motors. Those bare
+    // letters are the parameter, not a value that went missing.
+    if (leftover && /^(G28|M18|M84)$/.test(cmd) && /^[XYZEABCUVW]+$/i.test(leftover)) {
+      var flags = leftover.toUpperCase().split('');
+      for (var fi = 0; fi < flags.length; fi++) words[flags[fi]] = 0;
+      leftover = '';
+    }
     if (leftover) return { cmd: cmd, words: words, junk: leftover };
     return { cmd: cmd, words: words };
   }
@@ -136,6 +144,7 @@
     // than the print area on most machines — there is plate in front of the
     // printable square to purge on, and room behind it to present the part.
     var reach = s.bedReach && s.bedReach.length === 4 ? s.bedReach : null;
+    var reachZ = s.bedReachZ || 0;   // how far below the plate those scripts go
 
     // X/Y limits in the coordinate system the file actually uses.
     var minX = centre ? -bedX / 2 : 0, maxX = centre ? bedX / 2 : bedX;
@@ -273,6 +282,20 @@
       }
       if (p.macro) {
         st.macroSeen = true;
+        // Klipper's SET_KINEMATIC_POSITION moves the coordinate system rather
+        // than the head: the machine is told it is somewhere else, and stays
+        // exactly where it was. Follow it, or every later move in that script
+        // reads as a leap across the bed. Machines use it to reach a wiper
+        // that sits outside the space their coordinates can name.
+        if (/^SET_KINEMATIC_POSITION$/i.test(p.macro)) {
+          var kin = p.params || {};
+          if (kin.X !== undefined) st.x = kin.X;
+          if (kin.Y !== undefined) st.y = kin.Y;
+          if (kin.Z !== undefined) st.z = kin.Z;
+          st.homed = true;
+          st.positionKnown = true;
+          continue;
+        }
         if (/END|FINISH|COMPLETE/i.test(p.macro)) st.endMacroSeen = true;
         if (/START|PRINT_START|BEGIN/i.test(p.macro)) { st.hotendReady = true; st.homed = true; st.positionKnown = true; }
         var args = p.params || {};
@@ -527,7 +550,10 @@
         checkPointInBed(nx, ny, lineNo, raw, false);
       }
       if (nz !== null && bedZ) {
-        if (nz < -0.02) {
+        // A wiper pad sits below the print surface on some machines, and their
+        // own scripts go down to it. Only what the profile says it can reach.
+        var zFloor = (!st.inBody || st.inEnd) ? Math.min(0, reachZ) : 0;
+        if (nz < zFloor - 0.02) {
           add(ERROR, 'bounds.z.low', 'Move to Z' + round(nz) + ' is below the bed', lineNo, raw,
             'The nozzle would be pushed into the build surface.');
         } else if (nz > bedZ + MARGIN) {
@@ -694,16 +720,21 @@
             st.nozzleTarget = MIN_EXTRUDE_TEMP;   // report once
           }
 
+          // A machine's own script charges the nozzle before it prints: tens of
+          // millimetres pushed through standing still is what a prime is. In the
+          // print it is a fault. Either way an absurd figure is one.
+          var priming = !st.inBody || st.inEnd;
           if (deltaE > 50) {
             add(ERROR, 'extrude.huge', 'A single move extrudes ' + round(deltaE) + ' mm of filament', lineNo, raw,
               'This is far more than any real move needs and points at a generator fault.');
-          } else if (deltaE > 20) {
+          } else if (deltaE > 20 && !priming) {
             add(WARN, 'extrude.large', 'A single move extrudes ' + round(deltaE) + ' mm of filament', lineNo, raw);
           }
 
-          // volumetric rate
+          // Volumetric rate — of a printing move. A prime is deliberately not
+          // one: it pushes filament out with the head barely moving.
           var dist = arcLen > 0 ? arcLen : distance(st.x, st.y, st.z, nx, ny, nz);
-          if (maxVolumetric > 0 && dist > 0.1 && st.feed > 0) {
+          if (maxVolumetric > 0 && dist > 0.1 && st.feed > 0 && !priming) {
             var rate = (deltaE * filamentArea) / (dist / (st.feed / 60));
             if (rate > maxVolumetric * 2.5) {
               add(ERROR, 'flow.high', 'This move asks for ' + rate.toFixed(1) + ' mm³/s, against a ' + maxVolumetric + ' mm³/s limit',

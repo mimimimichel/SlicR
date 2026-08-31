@@ -119,6 +119,142 @@
       'G92 E0'
     ].join('\n'),
 
+    // Klipper machines whose macro is PRINT_START taking EXTRUDER and BED —
+    // Voron's convention, and what OrcaSlicer ships for them. The temperatures
+    // are also sent the ordinary way first, because a hand-written PRINT_START
+    // may or may not wait for them.
+    printstart: [
+      'M190 S{bed_temp}',
+      'M109 S{nozzle_temp}',
+      'PRINT_START EXTRUDER={nozzle_temp} BED={bed_temp}',
+      'G92 E0'
+    ].join('\n'),
+
+    // Qidi's macro is PRINT_START, and it takes its own parameter names. It
+    // homes, meshes and heats; what is left here is the purge.
+    qidi: [
+      'PRINT_START BED={bed_temp} HOTEND={nozzle_temp} CHAMBER={chamber_temp}',
+      'M190 S{bed_temp}',
+      'M109 S{nozzle_temp}',
+      'G90',
+      'M83',
+      'G92 E0',
+      'G1 X5 Y5 Z0.3 F6000',
+      'G1 X{prime_x} Y5 Z0.3 E{prime_e} F1200 ; purge line',
+      'G1 X{prime_x} Y5.5 Z0.3 F6000',
+      'G1 X5 Y5.5 Z0.3 E{prime_e} F1200',
+      'G92 E0',
+      'G1 Z1 F600'
+    ].join('\n'),
+
+    // The X-Plus 3 and its siblings run the same macro with no parameters at
+    // all, and drive the mesh from the file.
+    qidi_x3: [
+      'PRINT_START',
+      'G28',
+      'M141 S0',
+      'G0 Z50 F600',
+      'M190 S{bed_temp} ; wait for the bed before probing it',
+      'G28 Z',
+      'G29 ; mesh',
+      'G0 X0 Y0 Z50 F6000',
+      'M141 S{chamber_temp}',
+      'M109 S{nozzle_temp}',
+      'M106 P3 S255 ; filter fan',
+      'M83',
+      'G92 E0',
+      'G1 X5 Y5 Z0.3 F6000',
+      'G1 X{prime_x} Y5 Z0.3 E{prime_e} F1200 ; purge line',
+      'G1 X{prime_x} Y5.5 Z0.3 F6000',
+      'G1 X5 Y5.5 Z0.3 E{prime_e} F1200',
+      'G92 E0',
+      'G1 Z1 F600'
+    ].join('\n'),
+
+    // The SV08's START_PRINT takes no parameters and does not heat; its own
+    // script does that, and draws the purge in relative moves.
+    sovol_sv08: [
+      'G28',
+      'G90',
+      'G1 X0 F9000',
+      'G1 Y20',
+      'G1 Z0.600 F600',
+      'G1 Y0 F9000',
+      'START_PRINT',
+      'G90',
+      'G1 X0 F9000',
+      'G1 Y20',
+      'G1 Z0.600 F600',
+      'G1 Y0 F9000',
+      'M400',
+      'G91',
+      'M83',
+      'M140 S{bed_temp}',
+      'M104 S{nozzle_temp}',
+      'M190 S{bed_temp}',
+      'M109 S{nozzle_temp}',
+      'G1 E25 F300 ; charge the nozzle',
+      'G4 P1000',
+      'G1 E-0.200 Z5 F600',
+      'G1 X88.000 F9000',
+      'G1 Z-5.000 F600',
+      'G1 X87.000 E20.88 F1800 ; purge lines',
+      'G1 X87.000 E13.92 F1800',
+      'G1 Y1 E0.16 F1800',
+      'G1 X-87.000 E13.92 F1800',
+      'G1 X-87.000 E20.88 F1800',
+      'G1 Y1 E0.24 F1800',
+      'G1 X87.000 E20.88 F1800',
+      'G1 X87.000 E13.92 F1800',
+      'G1 E-0.200 Z1 F600',
+      'M400'
+    ].join('\n'),
+
+    // The X4s have no start macro at all. They wipe the nozzle on a pad reached
+    // by redefining Y — SET_KINEMATIC_POSITION moves the coordinate system, not
+    // the head — and then draw their lines along the front edge.
+    artillery_x4: [
+      'M104 S140',
+      'M190 S{bed_temp}',
+      'M109 S{nozzle_temp}',
+      'G28',
+      'G1 X{wipe_x} Y{wipe_y} Z10 F5000',
+      'SET_KINEMATIC_POSITION Y=0 ; the wiper sits past the end of the bed',
+      'G1 Y{wipe_in} F4000',
+      'G1 X{wipe_x} F4000',
+      'G1 Z-1 F600 ; down onto the pad',
+      'G1 X{wipe_x2} F4000',
+      'G1 Y{wipe_in2} F4000',
+      'G1 X{wipe_x} F4000',
+      'G92 E0',
+      'G1 Z10 F1200',
+      'G1 Y0 F5000',
+      'G1 E-1 F3000',
+      'M400',
+      'SET_KINEMATIC_POSITION Y={wipe_y} ; and back to where the bed really is',
+      'G92 E-1',
+      'M140 S{bed_temp}',
+      'M109 S{nozzle_temp}',
+      'G1 X0 Y0.8 Z0.8 F18000',
+      'G92 E0',
+      'G1 X0 Y0.8 Z0.3 E8 F600',
+      'G92 E0',
+      'G1 X{line_x} Y0.8 Z0.3 F1800 E{line_e} ; purge line',
+      'G92 E0',
+      'G1 X{line_x} Y0 Z0.3 F1800 E0.08',
+      'G92 E0',
+      'G1 X{line_x2} Y0 Z0.3 F1800 E10.0',
+      'G92 E0',
+      'G1 X{line_x2} Y1.6 Z0.3 F1800 E0.16',
+      'G92 E0',
+      'G1 X{line_x3} Y1.6 Z0.3 F1800 E8',
+      'G92 E0',
+      'G1 X{line_x3} Y0 Z0.3 F1800 E0.16',
+      'G92 E0',
+      'G1 E-1 Z5 F18000',
+      'G92 E0'
+    ].join('\n'),
+
     delta: [
       'M140 S{bed_temp}',
       'M104 S{nozzle_temp}',
@@ -181,6 +317,41 @@
       'M84 ; motors off'
     ].join('\n'),
 
+    printstart: [
+      'PRINT_END',
+      'M104 S0',
+      'M140 S0',
+      'M107'
+    ].join('\n'),
+
+    qidi: [
+      'M141 S0 ; chamber off',
+      'M104 S0',
+      'M140 S0',
+      'M83 ; the retract below is a distance, not a position',
+      'G1 E-3 F1800',
+      'G0 Z{min(max_z + 3, bed_z)} F600',
+      'G0 X0 Y0 F12000',
+      'M107'
+    ].join('\n'),
+
+    artillery_x4: [
+      'G91 ; relative',
+      'M83 ; and E with it — Klipper keeps the two apart',
+      'G1 E-1 F2700',
+      // Artillery lift 0.2 mm here before wiping sideways. A millimetre costs
+      // nothing and keeps the nozzle off the top surface it just laid.
+      'G1 E-1 Z1 F2400',
+      'G1 X5 Y5 F3000 ; wipe off',
+      'G1 Z1',
+      'G90 ; absolute',
+      'G1 X0 Y{present_y} F3000 ; present the print',
+      'M106 S0',
+      'M104 S0',
+      'M140 S0',
+      'M84 X Y E'
+    ].join('\n'),
+
     delta: [
       'M104 S0',
       'M140 S0',
@@ -205,6 +376,7 @@
     var end = ENDS[opts.end || 'standard'];
     var zSpeed = opts.maxZSpeed || 12;
     var zFeed = Math.round(Math.min(opts.travel || 200, zSpeed) * 60);
+    var primeX = Math.round(bx * 0.4);
     return {
       name: name,
       brand: brand,
@@ -229,6 +401,9 @@
       // in front of the plate, sliding the bed out to hand the part over. Left
       // unset, the print area is all that is assumed to exist.
       reach: opts.reach || null,
+      // And how far below the plate they go — a wiper pad usually sits lower
+      // than the print surface.
+      reachZ: opts.reachZ != null ? opts.reachZ : 0,
       extruders: opts.extruders || 1,
       nozzle: opts.nozzle || 0.4,
       filamentDiameter: opts.filamentDiameter || 1.75,
@@ -245,6 +420,19 @@
         .replace(/\{prime_radius\}/g, Math.round(bx / 2 - 12))
         .replace(/\{bed_x_half\}/g, Math.round(bx / 2))
         .replace(/\{purge_end\}/g, Math.round(bx / 2 - 50))
+        // A purge line from X5 along the front, and what it costs in filament:
+        // a 0.5 by 0.3 mm section is 0.15 mm2, against 3.3 mm2 of 1.75 stock.
+        .replace(/\{prime_x\}/g, primeX)
+        .replace(/\{prime_e\}/g, Math.round((primeX - 5) * 0.0624 * 10) / 10)
+        .replace(/\{wipe_x\}/g, Math.round(bx * 0.75))
+        .replace(/\{wipe_x2\}/g, Math.round(bx * 0.75) + 50)
+        .replace(/\{wipe_y\}/g, by - 3)
+        .replace(/\{wipe_in\}/g, Math.round(by * 0.05))
+        .replace(/\{wipe_in2\}/g, Math.round(by * 0.05) + 5)
+        .replace(/\{line_x\}/g, Math.round(bx * 0.7))
+        .replace(/\{line_x2\}/g, Math.round(bx * 0.3))
+        .replace(/\{line_x3\}/g, Math.round(bx * 0.6))
+        .replace(/\{line_e\}/g, Math.round(bx * 0.7 * 0.1))
         .replace(/\{z_feed\}/g, zFeed),
       endGcode: end
         .replace(/\{present_y\}/g, Math.max(10, Math.round(by - 20)))
@@ -325,28 +513,32 @@
       { accel: 2000, travel: 180, retract: 1.0, start: 'mesh' }),
     sovol_sv06_plus: printer('Sovol SV06 Plus', 'Sovol', 300, 300, 340,
       { accel: 2000, travel: 180, retract: 1.0, start: 'mesh' }),
+    // START_PRINT here takes no parameters, and does not heat: the file does.
     sovol_sv08: printer('Sovol SV08', 'Sovol', 350, 350, 345,
       { accel: 12000, travel: 400, retract: 0.5, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 600, maxZSpeed: 25 }),
+        start: 'sovol_sv08', end: 'klipper', maxSpeed: 600, maxZSpeed: 25 }),
 
     // --- Qidi ---
+    // Qidi's macro is PRINT_START, not START_PRINT, and the two families take
+    // different parameters — the X3 takes none at all.
     qidi_xplus3: printer('Qidi X-Plus 3', 'Qidi', 280, 280, 270,
       { kinematics: 'corexy', accel: 12000, travel: 300, retract: 0.8, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 350, maxBedTemp: 120, maxZSpeed: 25 }),
+        start: 'qidi_x3', end: 'qidi', maxSpeed: 600, maxNozzleTemp: 350, maxBedTemp: 120, maxZSpeed: 25 }),
     qidi_q1pro: printer('Qidi Q1 Pro', 'Qidi', 245, 245, 240,
       { kinematics: 'corexy', accel: 12000, travel: 300, retract: 0.8, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 350, maxBedTemp: 120, maxZSpeed: 25 }),
+        start: 'qidi', end: 'qidi', maxSpeed: 600, maxNozzleTemp: 350, maxBedTemp: 120, maxZSpeed: 25 }),
 
     // --- Voron ---
+    // Voron's convention is PRINT_START, taking EXTRUDER and BED.
     voron_02: printer('Voron 0.2', 'Voron', 120, 120, 120,
       { kinematics: 'corexy', accel: 10000, travel: 300, retract: 0.6, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 400, maxZSpeed: 30 }),
+        start: 'printstart', end: 'printstart', maxSpeed: 400, maxZSpeed: 30 }),
     voron_trident: printer('Voron Trident 300', 'Voron', 300, 300, 250,
       { kinematics: 'corexy', accel: 12000, travel: 400, retract: 0.6, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 25 }),
+        start: 'printstart', end: 'printstart', maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 25 }),
     voron_24_350: printer('Voron 2.4 (350)', 'Voron', 350, 350, 330,
       { kinematics: 'corexy', accel: 12000, travel: 400, retract: 0.6, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 25 }),
+        start: 'printstart', end: 'printstart', maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 25 }),
 
     // --- Artillery ---
     artillery_x1: printer('Artillery Sidewinder X1', 'Artillery', 300, 300, 400,
@@ -355,12 +547,16 @@
       { accel: 1500, travel: 150, retract: 1.5, start: 'mesh' }),
     artillery_x3: printer('Artillery Sidewinder X3 Plus', 'Artillery', 300, 300, 400,
       { accel: 3000, travel: 200, retract: 1.2, start: 'mesh', maxSpeed: 300 }),
-    artillery_x4_plus: printer('Artillery Sidewinder X4 Plus', 'Artillery', 300, 300, 400,
+    // No start macro at all on these: the file does the wiping and the priming,
+    // and the wiper pad is past the back of the bed and a millimetre below it.
+    artillery_x4_plus: printer('Artillery Sidewinder X4 Plus', 'Artillery', 300, 310, 400,
       { accel: 12000, travel: 300, retract: 0.8, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 500, maxZSpeed: 20 }),
-    artillery_x4_pro: printer('Artillery Sidewinder X4 Pro', 'Artillery', 300, 300, 400,
+        start: 'artillery_x4', end: 'artillery_x4', reach: [-6, 0, 300, 310], reachZ: -1,
+        maxSpeed: 500, maxZSpeed: 20 }),
+    artillery_x4_pro: printer('Artillery Sidewinder X4 Pro', 'Artillery', 240, 250, 260,
       { accel: 20000, travel: 500, retract: 0.8, flavor: 'klipper',
-        start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 320, maxBedTemp: 120, maxZSpeed: 25 }),
+        start: 'artillery_x4', end: 'artillery_x4', reach: [-6, 0, 240, 250], reachZ: -1,
+        maxSpeed: 600, maxNozzleTemp: 320, maxBedTemp: 120, maxZSpeed: 25 }),
     artillery_genius: printer('Artillery Genius', 'Artillery', 220, 220, 250,
       { accel: 1000, travel: 120, retract: 1.5, zHop: 0 }),
     artillery_genius_pro: printer('Artillery Genius Pro', 'Artillery', 220, 220, 250,
@@ -490,6 +686,7 @@
       extruderClearanceHeight: p.clearanceHeight || 25,
       kinematics: p.kinematics,
       bedReach: p.reach || null,
+      bedReachZ: p.reachZ || 0,
       extruderCount: p.extruders,
       // What a fresh tool has to push out before it can be trusted to lay a
       // clean line: the old colour is still sitting in the melt zone.
