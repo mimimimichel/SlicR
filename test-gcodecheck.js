@@ -58,7 +58,7 @@ expectClean('raft + brim + ironing', slice('centauri_carbon','pla',function(s){ 
 expectClean('relative E + klipper', slice('creality_k1','pla',function(s){ s.relativeE=true; }));
 
 console.log('\n=== 3. injected faults must all be caught ===');
-var base = slice('centauri_carbon');
+var base = slice('prusa_mk3s');
 var g = base.gcode, st = base.settings;
 function withLine(gc, find, replace){ return gc.replace(find, replace); }
 
@@ -96,6 +96,26 @@ var v = C.verify(delta.gcode, deltaCorner);
 console.log('  same file checked as if the origin were a corner ->', v.errors, 'errors,',
   'first:', v.findings.filter(f=>f.severity==='error')[0] ? v.findings.filter(f=>f.severity==='error')[0].code : 'none');
 if(v.errors>0) pass++; else { fail++; console.log('  MISSED: an origin mismatch should be flagged'); }
+
+// --- the file must say how coordinates are read before it moves ---
+// G90/G91 and M82/M83 survive between prints, so a file that starts moving
+// without setting them does whatever the previous one left behind.
+expectCatch('moving before the positioning mode is set',
+  ['M140 S60', 'M190 S60', 'M104 S200', 'M109 S200',
+   'G28', 'G1 Z2.0 F1200',                    // moves, and G90 has not been sent
+   'G90', 'M82', 'G92 E0',
+   ';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200',
+   'M104 S0', 'M140 S0'].join('\n'),
+  base.settings, 'mode.unset', 'error');
+
+// And the same file with G90 sent first must not be flagged for it.
+var okModes = C.verify(['M140 S60', 'M190 S60', 'M104 S200', 'M109 S200',
+  'G90', 'M82', 'G28', 'G1 Z2.0 F1200', 'G92 E0',
+  ';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200',
+  'M104 S0', 'M140 S0'].join('\n'), base.settings);
+if (okModes.findings.some(function (f) { return f.code === 'mode.unset'; })) {
+  fail++; console.log('  FALSE ALARM: mode.unset raised on a file that sets G90 first');
+} else { pass++; console.log('  ok      G90 before the first move is not flagged'); }
 
 console.log('\n'+pass+' passed, '+fail+' failed');
 process.exit(fail?1:0);

@@ -138,7 +138,7 @@
 
     var st = {
       x: null, y: null, z: null, e: 0,
-      absXYZ: true, absE: true,
+      absXYZ: true, absE: true, sawG90: false, sawEMode: false, modeWarned: false,
       homed: false, positionKnown: false,
       feed: 0,
       nozzleTarget: 0, bedTarget: 0, chamberTarget: 0,
@@ -319,10 +319,10 @@
           if (st.extruded) add(WARN, 'levelling.mid', 'Bed levelling in the middle of the print', lineNo, raw);
           break;
 
-        case 'G90': st.absXYZ = true; break;
-        case 'G91': st.absXYZ = false; break;
-        case 'M82': st.absE = true; break;
-        case 'M83': st.absE = false; break;
+        case 'G90': st.absXYZ = true; st.sawG90 = true; break;
+        case 'G91': st.absXYZ = false; st.sawG90 = true; break;
+        case 'M82': st.absE = true; st.sawEMode = true; break;
+        case 'M83': st.absE = false; st.sawEMode = true; break;
 
         case 'G92':
           if (w.E !== undefined) st.e = w.E;
@@ -464,6 +464,21 @@
       }
 
       var hasAxis = w.X !== undefined || w.Y !== undefined || w.Z !== undefined;
+
+      // Nothing may move before the file has said which way coordinates are
+      // read. A machine holds G90/G91 and M82/M83 across jobs, so a file that
+      // starts moving without setting them inherits whatever the last one left:
+      // the same lines mean absolute positions to one printer and offsets to
+      // the next, and the second lays the whole print at the wrong height.
+      if ((hasAxis || w.E !== undefined) && !st.modeWarned &&
+          (!st.sawG90 || (w.E !== undefined && !st.sawEMode))) {
+        st.modeWarned = true;
+        add(ERROR, 'mode.unset',
+          'The file moves before it says whether coordinates are absolute or relative',
+          lineNo, raw,
+          'G90/G91 and M82/M83 survive between prints, so this file does whatever ' +
+          'the last one left behind. Send them before the first move.');
+      }
       if (hasAxis && !st.positionKnown) {
         add(ERROR, 'move.unhomed', 'The machine is moved before it has been homed', lineNo, raw,
           'The controller assumes it is at the origin, so this move can drive the head into the frame or the bed.');

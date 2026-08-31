@@ -3471,9 +3471,24 @@
     out.push('; origin = ' + (s.originCenter ? 'centre' : 'front-left'));
     out.push('');
 
+    // Positioning mode BEFORE anything moves. The start script homes, lifts and
+    // draws a prime line at absolute coordinates; if the machine was left in
+    // relative mode by the previous job or by its own macros, every one of those
+    // is taken as an offset — the lift becomes a climb, the prime line goes
+    // somewhere else entirely, and Z is wrong for the whole print.
+    out.push('G90 ; absolute positioning');
+    // Start scripts write their prime line in absolute E — 'E15' then 'E30'
+    // meaning fifteen millimetres and then fifteen more. Handing them relative E
+    // makes that thirty and then thirty. The profile's own choice is applied
+    // after the script, where the rest of the file needs it.
+    out.push('M82 ; absolute extrusion');
+    out.push('G92 E0');
+
     out.push(renderTemplate(s.startGcode, s, {}));
 
     if (s.chamberTemp > 0) { out.push('M141 S' + s.chamberTemp + ' ; chamber'); }
+    // Asserted again: a machine's own start macro is free to leave either mode
+    // however it likes, and the body that follows assumes both.
     out.push('G90 ; absolute positioning');
     out.push(s.relativeE ? 'M83 ; relative extrusion' : 'M82 ; absolute extrusion');
     out.push('G92 E0');

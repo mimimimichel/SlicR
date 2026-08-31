@@ -184,8 +184,14 @@
 
   var PRINTERS = {
     // --- Elegoo ---
+    // Klipper, like every other machine of its generation here. It was the one
+    // profile left on the generic Marlin start script, which homes and then goes
+    // straight to the first layer height without the machine's own start macro —
+    // so no bed mesh and no saved Z offset, and the nozzle drags on the plate.
     centauri_carbon: printer('Elegoo Centauri Carbon', 'Elegoo', 256, 256, 256,
-      { kinematics: 'corexy', accel: 8000, travel: 300, retract: 0.8, retractSpeed: 40, maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
+      { kinematics: 'corexy', accel: 8000, travel: 300, retract: 0.8, retractSpeed: 40,
+        flavor: 'klipper', start: 'klipper', end: 'klipper',
+        maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
     elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 225, 225, 265,
       { accel: 4000, travel: 250, retract: 1.0, start: 'mesh', flavor: 'klipper' }),
     elegoo_neptune4_plus: printer('Elegoo Neptune 4 Plus', 'Elegoo', 320, 320, 350,
