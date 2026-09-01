@@ -3497,7 +3497,33 @@
     out.push('M82 ; absolute extrusion');
     out.push('G92 E0');
 
-    out.push(renderTemplate(s.startGcode, s, { total_layers: layers.length }));
+    // Where the first layer actually sits on the plate. A machine that probes
+    // only the area it is about to print on needs to be told what that is, and
+    // a start script that draws its purge line along the front edge needs to
+    // know whether the part is in the way of it.
+    var firstBox = { minX: 0, minY: 0, maxX: s.bedX, maxY: s.bedY };
+    if (layers.length && layers[0].feats.length) {
+      var fb = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      for (var ff = 0; ff < layers[0].feats.length; ff++) {
+        var fpts = layers[0].feats[ff].pts;
+        for (var fp = 0; fp < fpts.length; fp++) {
+          var fx = fpts[fp].X / SCALE - originX, fy = fpts[fp].Y / SCALE - originY;
+          if (fx < fb.minX) fb.minX = fx;
+          if (fy < fb.minY) fb.minY = fy;
+          if (fx > fb.maxX) fb.maxX = fx;
+          if (fy > fb.maxY) fb.maxY = fy;
+        }
+      }
+      if (fb.minX <= fb.maxX) firstBox = fb;
+    }
+
+    out.push(renderTemplate(s.startGcode, s, {
+      total_layers: layers.length,
+      first_layer_min_x: Math.round(firstBox.minX * 100) / 100,
+      first_layer_min_y: Math.round(firstBox.minY * 100) / 100,
+      first_layer_max_x: Math.round(firstBox.maxX * 100) / 100,
+      first_layer_max_y: Math.round(firstBox.maxY * 100) / 100
+    }));
 
     if (s.chamberTemp > 0) { out.push('M141 S' + s.chamberTemp + ' ; chamber'); }
     // Asserted again: a machine's own start macro is free to leave either mode

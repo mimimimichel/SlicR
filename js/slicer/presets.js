@@ -92,6 +92,53 @@
       'G92 E0'
     ].join('\n'),
 
+    // The Centauri Carbon 2, from Elegoo's own machine G-code, and a different
+    // machine from the first one under the lid: it probes the plate on every
+    // print (BED_MESH_CALIBRATE over just the area about to be used) where the
+    // CC1 wipes the nozzle and trusts a stored mesh, it loads filament through
+    // M6211, and it parks with G180 rather than M749.
+    centauri2: [
+      ';===== Elegoo Centauri Carbon 2 =====',
+      'G90',
+      'M104 S140 ; warm, not hot enough to drool while probing',
+      'M140 S{bed_temp}',
+      // Elegoo pass an A flag here that their firmware reads and nothing else
+      // does. Without it this simply waits, which is the safe reading.
+      'M190 S{bed_temp} ; wait for the bed before touching it with the probe',
+      'M106 S0',
+      'BED_MESH_CALIBRATE mesh_min={max(5, first_layer_min_x - 5)},{max(5, first_layer_min_y - 5)}' +
+        ' mesh_max={min(bed_x - 5, first_layer_max_x + 5)},{min(bed_y - 5, first_layer_max_y + 5)}' +
+        ' ALGORITHM=bicubic PROBE_COUNT=9,9 ADAPTIVE=0 ADAPTIVE_MARGIN=0 FROM_SLICER=1',
+      'G28 ; home',
+      'M109 S{nozzle_temp} ; wait for the nozzle',
+      'M6211 A1 L200 T0 Q{nozzle_temp} R{nozzle_temp} S{nozzle_temp} ; load filament',
+      'T0',
+      'SET_PRINT_STATS_INFO TOTAL_LAYER={total_layers} CURRENT_LAYER=0',
+      // The purge line runs along the lip in front of the plate. If the part
+      // starts within half a millimetre of that edge, there is nowhere to put
+      // it and the filament is pushed out on the spot instead.
+      '{if first_layer_min_y > 0.5}',
+      'G180 S7',
+      'G1 X{bed_x / 2 - 1} Y-1.2 F20000',
+      'G1 Z0.5 F900',
+      'M83',
+      'G92 E0',
+      'G1 E6 F600 ; charge the nozzle',
+      'M106 S200',
+      'G1 X{bed_x / 2 - 41} E20 F3000 ; purge line',
+      'G1 F6000',
+      'G1 X{bed_x / 2 - 46} E0.8',
+      'M106 S0',
+      'G180 S8',
+      '{else}',
+      'M83',
+      'G92 E0',
+      'G1 E30 F600 ; nowhere to draw a line, so push it out where it stands',
+      '{endif}',
+      'G1 F20000',
+      'G92 E0'
+    ].join('\n'),
+
     // Elegoo's Neptune 4 family, from their own machine G-code. It levels in
     // firmware and has no G29 — Klipper does not have that command at all, and
     // refuses a file that uses it.
@@ -364,6 +411,22 @@
       'M84 ; motors off'
     ].join('\n'),
 
+    centauri2: [
+      ';===== Elegoo Centauri Carbon 2 =====',
+      'M140 S0 ; bed off',
+      'M83 ; the retract below is a distance',
+      'G92 E0',
+      'G1 E-1.5 F1800 ; retract',
+      'G2 I0 J1 Z{max_z + 0.5} F3000 ; curl away from the part',
+      'M106 S0 ; part fan off',
+      'M106 P2 S0 ; auxiliary fan off',
+      'G90',
+      'G1 Z{min(max_z + 5, bed_z - 0.5)} F20000 ; get the head clear',
+      'G180 S9 ; park',
+      'M104 S0 ; nozzle off',
+      'M84 ; motors off'
+    ].join('\n'),
+
     neptune4: [
       'G90 ; absolute',
       'M83 ; the retract below is a distance',
@@ -576,6 +639,15 @@
         // The screen's layer counter reads this, not the ;LAYER comments.
         layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
         maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
+    // The second machine of the name, and not the same one: it probes on every
+    // print instead of wiping and reloading a stored mesh, and it parks
+    // differently. Same plate, same 0.4 hardened nozzle.
+    centauri_carbon_2: printer('Elegoo Centauri Carbon 2', 'Elegoo', 256, 256, 256,
+      { kinematics: 'corexy', accel: 20000, travel: 500, retract: 0.8, retractSpeed: 30,
+        flavor: 'klipper', start: 'centauri2', end: 'centauri2',
+        reach: [-2, -3, 256, 266],
+        layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
+        zHop: 0.4, maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
     elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 230, 230, 265,
       { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper',
         start: 'neptune4', end: 'neptune4' }),

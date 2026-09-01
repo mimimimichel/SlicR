@@ -101,16 +101,27 @@ else console.log('  ok  the chamber line appears when there is a chamber');
 
 // Every shipped profile's start and end script must still render with nothing
 // left unresolved — a stray {placeholder} in a start script is a live grenade.
+// This walked P.printers, which does not exist: it was checking an empty list
+// and saying so cheerfully. It walks the real one now, with the same variables
+// the engine hands the templates.
+var keys = Object.keys(P.PRINTERS);
 var stray = [];
-Object.keys(P.printers || {}).forEach(function (key) {
-  var s2 = P.buildSettings(key, 'pla', 'standard_02');
-  ['startGcode', 'endGcode'].forEach(function (which) {
-    var r = E.slice ? null : null;
+keys.forEach(function (key) {
+  var s2 = P.buildSettings(key, 'pla', 'q020');
+  ['startGcode', 'endGcode', 'layerGcode'].forEach(function (which) {
     var text = globalThis.OrcaTemplate.render(s2[which] || '', (function () {
-      var v = {}; for (var k in s2) if (typeof s2[k] !== 'object') v[k] = s2[k];
+      var v = {};
+      for (var k in s2) {
+        if (s2[k] === null || typeof s2[k] === 'object' || typeof s2[k] === 'function') continue;
+        v[k] = s2[k];
+        v[k.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()] = s2[k];
+      }
       v.nozzle_temp = s2.firstLayerNozzleTemp; v.first_layer_temp = s2.firstLayerNozzleTemp;
       v.bed_temp = s2.firstLayerBedTemp; v.bed_x = s2.bedX; v.bed_y = s2.bedY; v.bed_z = s2.bedZ;
       v.chamber_temp = s2.chamberTemp; v.layer_height = s2.layerHeight;
+      v.total_layers = 40; v.max_z = 8; v.layer_num = 0; v.layer_z = 0.2;
+      v.first_layer_min_x = 100; v.first_layer_min_y = 100;
+      v.first_layer_max_x = 140; v.first_layer_max_y = 140;
       return v;
     })());
     var left = text.match(/\{[^}]*\}/g);
@@ -118,7 +129,42 @@ Object.keys(P.printers || {}).forEach(function (key) {
   });
 });
 if (stray.length) { fails++; console.log('FAIL  unresolved placeholders: ' + stray.slice(0,4).join(' | ')); }
-else console.log('  ok  all 43 profiles render with nothing left unresolved');
+else console.log('  ok  all ' + keys.length + ' profiles render with nothing left unresolved');
+
+// The Centauri Carbon 2 probes only the area it is about to print on, and puts
+// its purge line on the lip in front of the plate — unless the part is sitting
+// on that lip, in which case there is nowhere to draw it.
+function startFor(key, box) {
+  var s3 = P.buildSettings(key, 'pla', 'q020');
+  return globalThis.OrcaTemplate.render(s3.startGcode, {
+    bed_temp: s3.firstLayerBedTemp, nozzle_temp: s3.firstLayerNozzleTemp,
+    bed_x: s3.bedX, bed_y: s3.bedY, bed_z: s3.bedZ, total_layers: 40,
+    first_layer_min_x: box[0], first_layer_min_y: box[1],
+    first_layer_max_x: box[2], first_layer_max_y: box[3]
+  });
+}
+var mid = startFor('centauri_carbon_2', [100, 100, 140, 140]);
+var mesh = /BED_MESH_CALIBRATE mesh_min=([\d.]+),([\d.]+) mesh_max=([\d.]+),([\d.]+)/.exec(mid);
+if (mesh && +mesh[1] <= 100 && +mesh[2] <= 100 && +mesh[3] >= 140 && +mesh[4] >= 140) {
+  console.log('  ok  the CC2 probes a box that brackets the first layer: ' +
+    mesh[1] + ',' + mesh[2] + ' to ' + mesh[3] + ',' + mesh[4]);
+} else { fails++; console.log('FAIL  CC2 mesh box: ' + (mesh ? mesh[0] : 'not emitted')); }
+
+if (/Y-1\.2/.test(mid) && /purge line/.test(mid)) console.log('  ok  and draws its purge line on the lip');
+else { fails++; console.log('FAIL  CC2 purge line missing when there is room for it'); }
+
+// A part whose first layer starts at Y0.2 is standing where that line would go.
+var edge = startFor('centauri_carbon_2', [100, 0.2, 140, 140]);
+if (!/Y-1\.2/.test(edge) && /E30/.test(edge))
+  console.log('  ok  a part on the lip gets the filament pushed out on the spot instead');
+else { fails++; console.log('FAIL  CC2 purge branch did not flip for a part at the front edge'); }
+
+// The probed box stays on the plate however the part is placed.
+var corner = startFor('centauri_carbon_2', [0, 0, 256, 256]);
+var cm = /mesh_min=([\d.-]+),([\d.-]+) mesh_max=([\d.-]+),([\d.-]+)/.exec(corner);
+if (cm && +cm[1] >= 0 && +cm[2] >= 0 && +cm[3] <= 256 && +cm[4] <= 256)
+  console.log('  ok  and stays on the plate for a part covering all of it: ' + cm[0]);
+else { fails++; console.log('FAIL  CC2 mesh box left the plate: ' + (cm ? cm[0] : 'not emitted')); }
 
 console.log(fails ? '\n' + fails + ' FAILURES' : '\nall template checks pass');
 process.exit(fails ? 1 : 0);
