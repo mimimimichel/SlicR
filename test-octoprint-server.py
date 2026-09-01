@@ -18,6 +18,14 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5099
 API_KEY = sys.argv[2] if len(sys.argv) > 2 else "TESTKEY"
 
 received = []
+commands = []
+
+# What this machine says about itself, and what the control endpoints change.
+state = {
+    "text": "Operational", "printing": False,
+    "nozzle": 24.1, "nozzleTarget": 0, "bed": 23.4, "bedTarget": 0,
+    "file": None, "percent": None, "left": None,
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -52,6 +60,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/_received":
             return self._send(200, received)
+        if self.path == "/_commands":
+            return self._send(200, commands)
+        if self.path.startswith("/_printing"):
+            # Let a test put the machine into a printing state to drive against.
+            state.update(text="Printing", printing=True, file="part.gcode",
+                         percent=42, left=1800, nozzle=214.6, nozzleTarget=215,
+                         bed=59.8, bedTarget=60)
+            return self._send(200, state)
         if not self._authorised():
             return self._send(403, {"error": "Invalid API key"})
         if self.path == "/api/version":
@@ -59,13 +75,50 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/connection":
             return self._send(200, {"current": {"state": "Operational"}})
         if self.path == "/api/job":
-            return self._send(200, {"state": "Operational", "job": {"file": {"name": None}},
-                                    "progress": {"completion": None, "printTimeLeft": None}})
+            return self._send(200, {"state": state["text"], "job": {"file": {"name": state["file"]}},
+                                    "progress": {"completion": state["percent"],
+                                                 "printTimeLeft": state["left"]}})
+        if self.path == "/api/printer":
+            return self._send(200, {
+                "state": {"text": state["text"], "flags": {"printing": state["printing"]}},
+                "temperature": {
+                    "tool0": {"actual": state["nozzle"], "target": state["nozzleTarget"]},
+                    "bed": {"actual": state["bed"], "target": state["bedTarget"]},
+                },
+            })
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
         if not self._authorised():
             return self._send(403, {"error": "Invalid API key"})
+
+        # The control endpoints, which record what they were told so a test can
+        # check the machine was actually driven and not merely asked politely.
+        if self.path in ("/api/job", "/api/printer/printhead", "/api/printer/tool",
+                         "/api/printer/bed", "/api/printer/command"):
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                sent = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                return self._send(400, {"error": "bad json"})
+            commands.append({"path": self.path, "body": sent})
+
+            if self.path == "/api/job":
+                if sent.get("command") == "pause":
+                    action = sent.get("action")
+                    if action == "resume" or (action == "toggle" and state["text"] == "Paused"):
+                        state["text"], state["printing"] = "Printing", True
+                    else:
+                        state["text"], state["printing"] = "Paused", False
+                elif sent.get("command") == "cancel":
+                    state.update(text="Operational", printing=False, file=None,
+                                 percent=None, left=None)
+            elif self.path == "/api/printer/bed":
+                state["bedTarget"] = sent.get("target", 0)
+            elif self.path == "/api/printer/tool" and sent.get("command") == "target":
+                state["nozzleTarget"] = (sent.get("targets") or {}).get("tool0", 0)
+            return self._send(204, {})
+
         if not self.path.startswith("/api/files/"):
             return self._send(404, {"error": "not found"})
 

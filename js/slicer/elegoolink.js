@@ -310,6 +310,61 @@
     return 'The printer answered with code ' + ack + '.';
   }
 
+  /**
+   * What the first Carbon is doing. Its status arrives unprompted on the
+   * websocket as well; command 0 asks for it now.
+   */
+  function sdcpStatus(cfg, opts) {
+    return sdcpCommand(cfg, 0, {}, opts).then(function (res) {
+      return readSdcpStatus(res);
+    }, function (err) {
+      // Command 0 is answered by a status broadcast rather than an Ack on some
+      // firmwares, which sdcpCommand reads as silence.
+      throw err;
+    });
+  }
+
+  /** The status message's shape, which is the same however it arrives. */
+  function readSdcpStatus(msg) {
+    var st = (msg && (msg.Status || (msg.Data && msg.Data.Status))) || {};
+    var p = st.PrintInfo || {};
+    var STATES = {
+      0: 'Idle', 5: 'Pausing', 8: 'Preparing', 9: 'Starting',
+      10: 'Paused', 13: 'Printing', 20: 'Resuming'
+    };
+    return {
+      text: STATES[p.Status] || 'Unknown',
+      code: p.Status,
+      nozzle: { now: st.TempOfNozzle, target: st.TempTargetNozzle },
+      bed: { now: st.TempOfHotbed, target: st.TempTargetHotbed },
+      chamber: { now: st.TempOfBox, target: st.TempTargetBox },
+      job: {
+        file: p.Filename || null,
+        layer: p.CurrentLayer,
+        layers: p.TotalLayer,
+        percent: typeof p.Progress === 'number' ? Math.round(p.Progress) : null,
+        secondsLeft: (typeof p.TotalTicks === 'number' && typeof p.CurrentTicks === 'number')
+          ? Math.max(0, Math.round((p.TotalTicks - p.CurrentTicks)))
+          : null
+      }
+    };
+  }
+
+  var SDCP_JOB = { pause: 129, cancel: 130, resume: 131 };
+
+  function sdcpJob(cfg, what, opts) {
+    var cmd = SDCP_JOB[what];
+    if (!cmd) return Promise.reject(new Error('Unknown job command: ' + what));
+    return sdcpCommand(cfg, cmd, {}, opts).then(function () { return { done: what }; });
+  }
+
+  /** The chamber light. RGB is in the protocol but the machine ignores it. */
+  function sdcpLight(cfg, on, opts) {
+    return sdcpCommand(cfg, 403, {
+      LightStatus: { SecondLight: !!on, RgbLight: [0, 0, 0] }
+    }, opts).then(function () { return { on: !!on }; });
+  }
+
   function sdcpStartPrint(cfg, filename, opts) {
     var path = filename.charAt(0) === '/' ? filename : '/local/' + fileName(filename);
     return sdcpCommand(cfg, 128, {
@@ -368,6 +423,10 @@
     upload: upload,
     test: test,
     startPrint: startPrint,
+    sdcpStatus: sdcpStatus,
+    sdcpJob: sdcpJob,
+    sdcpLight: sdcpLight,
+    readSdcpStatus: readSdcpStatus,
     cc2Info: cc2Info,
     cc2Upload: cc2Upload,
     sdcpUpload: sdcpUpload,

@@ -41,7 +41,9 @@
     link: { kind: 'none', url: '', key: '', autoStart: false },
     sending: false,
     // The sweep of the local network, and what it turned up.
-    scan: { running: false, base: '', found: [], done: false, error: '', cancel: false }
+    scan: { running: false, base: '', found: [], done: false, error: '', cancel: false },
+    // What the printer last said about itself, and the poll that keeps asking.
+    control: { state: null, error: '', note: '', reading: false, busy: false, timer: null }
   };
 
   // ---------------------------------------------------------------------------
@@ -474,8 +476,266 @@
       : 'Find one below, or enter its address by hand. Sliced files can then be sent straight to it.'));
     body.appendChild(connected);
 
+    renderControl(body);
     renderScanner(body);
     renderPrinterLink(body);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Driving the machine
+  // ---------------------------------------------------------------------------
+
+  function fmtTemp(reading) {
+    if (!reading || typeof reading.now !== 'number') return '—';
+    var s = Math.round(reading.now) + ' °C';
+    if (typeof reading.target === 'number' && reading.target > 0) s += ' → ' + Math.round(reading.target);
+    return s;
+  }
+
+  function fmtLeft(seconds) {
+    if (typeof seconds !== 'number' || seconds <= 0) return '';
+    var m = Math.round(seconds / 60);
+    if (m < 60) return m + ' min left';
+    return Math.floor(m / 60) + ' h ' + (m % 60) + ' min left';
+  }
+
+  function controlBusy(on) {
+    state.control.busy = on;
+    var box = el('control-box');
+    if (box) box.classList.toggle('busy', !!on);
+  }
+
+  /** Run one command, then read the machine again so the panel tells the truth. */
+  function controlDo(promise, what) {
+    controlBusy(true);
+    state.control.error = '';
+    state.control.note = '';
+    promise.then(function () {
+      controlBusy(false);
+      state.control.note = what;
+      pollControl(true);
+    }, function (err) {
+      controlBusy(false);
+      state.control.error = err.message;
+      if (state.tab === 'device') renderPanel();
+    });
+  }
+
+  function pollControl(force) {
+    if (!window.OrcaControl) return;
+    var can = window.OrcaControl.capabilities(state.link);
+    if (!can.status || !linkReady()) return;
+    if (state.control.reading && !force) return;
+    state.control.reading = true;
+    window.OrcaControl.status(state.link).then(function (s) {
+      state.control.reading = false;
+      state.control.state = s;
+      if (state.tab === 'device') renderPanel();
+    }, function (err) {
+      state.control.reading = false;
+      state.control.state = null;
+      state.control.error = err.message;
+      if (state.tab === 'device') renderPanel();
+    });
+  }
+
+  /** Keep reading while the tab is open, and stop the moment it is not. */
+  function controlWatch(on) {
+    if (state.control.timer) { clearInterval(state.control.timer); state.control.timer = null; }
+    if (!on) return;
+    pollControl(true);
+    state.control.timer = setInterval(function () {
+      if (state.tab !== 'device' || !el('panel').classList.contains('open')) {
+        controlWatch(false);
+        return;
+      }
+      pollControl(false);
+    }, 4000);
+  }
+
+  function renderControl(body) {
+    if (!window.OrcaControl || !linkReady()) return;
+    var can = window.OrcaControl.capabilities(state.link);
+
+    var box = document.createElement('details');
+    box.className = 'sl-section';
+    box.id = 'control-box';
+    box.open = true;
+    var summary = document.createElement('summary');
+    summary.textContent = 'Control';
+    box.appendChild(summary);
+
+    if (!can.status && !can.job) {
+      var why = document.createElement('div');
+      why.className = 'sl-hint';
+      why.id = 'control-reason';
+      why.textContent = can.reason;
+      box.appendChild(why);
+      body.appendChild(box);
+      return;
+    }
+
+    var st = state.control.state;
+    var line = document.createElement('div');
+    line.className = 'sl-check-banner ' + (state.control.error && !st ? 'fail' : (st ? 'pass' : 'warn'));
+    line.id = 'control-state';
+    var head = document.createElement('b');
+    head.textContent = (state.control.error && !st) ? 'Cannot read the printer'
+      : (st ? st.text : 'Reading…');
+    line.appendChild(head);
+    if (state.control.error && !st) {
+      line.appendChild(document.createTextNode(state.control.error));
+    } else if (st) {
+      var bits = ['Nozzle ' + fmtTemp(st.nozzle), 'Bed ' + fmtTemp(st.bed)];
+      if (st.chamber && typeof st.chamber.now === 'number') bits.push('Chamber ' + fmtTemp(st.chamber));
+      if (st.job && st.job.file) {
+        bits.push(st.job.file + (typeof st.job.percent === 'number' ? ' · ' + st.job.percent + '%' : ''));
+        var left = fmtLeft(st.job.secondsLeft);
+        if (left) bits.push(left);
+      }
+      line.appendChild(document.createTextNode(bits.join(' · ')));
+    }
+    box.appendChild(line);
+
+    // What the last command did, or why it was refused. It sits apart from the
+    // state above because that line is rewritten every few seconds by the poll,
+    // and a refusal nobody had time to read is a refusal that did not happen.
+    if (state.control.error || state.control.note) {
+      var notice = document.createElement('div');
+      notice.className = 'sl-advice-item' + (state.control.error ? ' warning' : '');
+      notice.id = 'control-notice';
+      var text = document.createElement('div');
+      text.className = state.control.error ? 'msg' : 'why';
+      text.textContent = state.control.error || state.control.note;
+      notice.appendChild(text);
+      box.appendChild(notice);
+    }
+
+    if (can.job) {
+      var jobRow = document.createElement('div');
+      jobRow.className = 'sl-row';
+      var running = st && st.printing;
+      var paused = st && st.paused;
+
+      if (running || paused) {
+        var hold = document.createElement('button');
+        hold.className = 'sl-btn';
+        hold.type = 'button';
+        hold.id = 'btn-job-pause';
+        hold.textContent = paused ? 'Resume' : 'Pause';
+        hold.onclick = function () {
+          controlDo(window.OrcaControl.job(state.link, paused ? 'resume' : 'pause'),
+            paused ? 'Resumed.' : 'Paused.');
+        };
+        jobRow.appendChild(hold);
+
+        var stop = document.createElement('button');
+        stop.className = 'sl-btn';
+        stop.type = 'button';
+        stop.id = 'btn-job-cancel';
+        stop.textContent = 'Cancel the print';
+        stop.onclick = function () {
+          if (!window.confirm('Cancel the print?\n\n' +
+            'Everything printed so far is thrown away, and the machine cannot pick it ' +
+            'up again.')) return;
+          controlDo(window.OrcaControl.job(state.link, 'cancel'), 'Cancelled.');
+        };
+        jobRow.appendChild(stop);
+      } else {
+        var idle = document.createElement('div');
+        idle.className = 'sl-hint';
+        idle.textContent = 'Nothing is printing.';
+        jobRow.appendChild(idle);
+      }
+      box.appendChild(jobRow);
+    }
+
+    if (can.temps) {
+      [['nozzle', 'Nozzle', state.settings.nozzleTemp],
+       ['bed', 'Bed', state.settings.bedTemp]].forEach(function (h) {
+        var row = document.createElement('div');
+        row.className = 'sl-row';
+        var input = document.createElement('input');
+        input.className = 'sl-num';
+        input.type = 'number';
+        input.id = 'temp-' + h[0];
+        input.value = h[2];
+        input.min = 0;
+        input.max = h[0] === 'bed' ? state.settings.maxBedTemp : state.settings.maxNozzleTemp;
+        row.appendChild(input);
+        var set = document.createElement('button');
+        set.className = 'sl-btn';
+        set.type = 'button';
+        set.textContent = 'Heat ' + h[1].toLowerCase();
+        set.onclick = function () {
+          controlDo(window.OrcaControl.setTemp(state.link, h[0], input.value, state.settings),
+            h[1] + ' set to ' + input.value + ' °C.');
+        };
+        row.appendChild(set);
+        var off = document.createElement('button');
+        off.className = 'sl-btn';
+        off.type = 'button';
+        off.textContent = 'Off';
+        off.onclick = function () {
+          controlDo(window.OrcaControl.setTemp(state.link, h[0], 0, state.settings),
+            h[1] + ' off.');
+        };
+        row.appendChild(off);
+        box.appendChild(row);
+      });
+    }
+
+    if (can.jog) {
+      var jogRow = document.createElement('div');
+      jogRow.className = 'sl-row';
+      [['X −10', { x: -10 }], ['X +10', { x: 10 }],
+       ['Y −10', { y: -10 }], ['Y +10', { y: 10 }],
+       ['Z −1', { z: -1 }], ['Z +1', { z: 1 }]].forEach(function (m) {
+        var b = document.createElement('button');
+        b.className = 'sl-btn';
+        b.type = 'button';
+        b.textContent = m[0];
+        b.onclick = function () {
+          controlDo(window.OrcaControl.jog(state.link, m[1], state.control.state), 'Moved.');
+        };
+        jogRow.appendChild(b);
+      });
+      var homeBtn = document.createElement('button');
+      homeBtn.className = 'sl-btn';
+      homeBtn.type = 'button';
+      homeBtn.id = 'btn-home';
+      homeBtn.textContent = 'Home';
+      homeBtn.onclick = function () {
+        controlDo(window.OrcaControl.home(state.link, ['x', 'y', 'z'], state.control.state), 'Homed.');
+      };
+      jogRow.appendChild(homeBtn);
+      box.appendChild(jogRow);
+    }
+
+    if (can.light) {
+      var lightRow = document.createElement('div');
+      lightRow.className = 'sl-row';
+      [['Light on', true], ['Light off', false]].forEach(function (l) {
+        var b = document.createElement('button');
+        b.className = 'sl-btn';
+        b.type = 'button';
+        b.textContent = l[0];
+        b.onclick = function () {
+          controlDo(window.OrcaControl.light(state.link, l[1]), l[0] + '.');
+        };
+        lightRow.appendChild(b);
+      });
+      box.appendChild(lightRow);
+    }
+
+    if (can.reason) {
+      var note = document.createElement('div');
+      note.className = 'sl-hint';
+      note.textContent = can.reason;
+      box.appendChild(note);
+    }
+
+    body.appendChild(box);
   }
 
   function renderScanner(body) {
@@ -2100,10 +2360,13 @@
     renderPanel();
     el('panel').classList.add('open');
     el('backdrop').classList.add('show');
+    // Only ask the printer how it is while someone is looking at the answer.
+    controlWatch(state.tab === 'device');
   }
   function closePanel() {
     el('panel').classList.remove('open');
     el('backdrop').classList.remove('show');
+    controlWatch(false);
   }
 
   // ---------------------------------------------------------------------------

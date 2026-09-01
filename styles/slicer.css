@@ -737,3 +737,7 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 /* The send button only exists once there is a printer to send to, and the
    button's own display rule would otherwise win against [hidden]. */
 #btn-send[hidden] { display: none !important; }
+
+/* While a command is in flight the panel is still readable, but not clickable
+   twice. */
+.sl-section.busy { opacity: .6; pointer-events: none; }

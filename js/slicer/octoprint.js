@@ -183,8 +183,94 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Driving the machine
+  // ---------------------------------------------------------------------------
+
+  /** Temperatures and what the printer is doing, in one call. */
+  function printerState(cfg, opts) {
+    return request('GET', '/api/printer', cfg, opts).then(function (p) {
+      var t = (p && p.temperature) || {};
+      function reading(x) {
+        return x ? { now: x.actual, target: x.target } : { now: null, target: null };
+      }
+      return {
+        text: (p && p.state && p.state.text) || 'unknown',
+        flags: (p && p.state && p.state.flags) || {},
+        nozzle: reading(t.tool0),
+        bed: reading(t.bed),
+        chamber: reading(t.chamber)
+      };
+    });
+  }
+
+  /**
+   * Start, pause, resume or cancel the job that is loaded. OctoPrint spells
+   * pause and resume as one command with an action.
+   */
+  function job(cfg, what, opts) {
+    var body;
+    if (what === 'pause' || what === 'resume' || what === 'toggle') {
+      body = { command: 'pause', action: what === 'toggle' ? 'toggle' : what };
+    } else if (what === 'start' || what === 'cancel' || what === 'restart') {
+      body = { command: what };
+    } else {
+      return Promise.reject(new Error('Unknown job command: ' + what));
+    }
+    return request('POST', '/api/job', cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  /** Move the head by a relative amount, in millimetres. */
+  function jog(cfg, delta, opts) {
+    var body = { command: 'jog', absolute: false };
+    if (delta.x) body.x = delta.x;
+    if (delta.y) body.y = delta.y;
+    if (delta.z) body.z = delta.z;
+    if (delta.speed) body.speed = delta.speed;
+    return request('POST', '/api/printer/printhead', cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  function home(cfg, axes, opts) {
+    return request('POST', '/api/printer/printhead', cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'home', axes: axes || ['x', 'y', 'z'] })
+    });
+  }
+
+  /** Set a heater's target. The caller is responsible for the number. */
+  function setTemp(cfg, which, celsius, opts) {
+    var path = which === 'bed' ? '/api/printer/bed' : '/api/printer/tool';
+    var body = which === 'bed'
+      ? { command: 'target', target: celsius }
+      : { command: 'target', targets: { tool0: celsius } };
+    return request('POST', path, cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  /** Push or pull filament by a length in millimetres. */
+  function extrude(cfg, mm, opts) {
+    return request('POST', '/api/printer/tool', cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'extrude', amount: mm })
+    });
+  }
+
   var api = {
     normaliseUrl: normaliseUrl,
+    printerState: printerState,
+    job: job,
+    jog: jog,
+    home: home,
+    setTemp: setTemp,
+    extrude: extrude,
     fileName: fileName,
     explain: explain,
     test: test,
