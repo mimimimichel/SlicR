@@ -118,6 +118,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, {"error_code": 0})
 
 
+HOST = sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1"
+
+
 if __name__ == "__main__":
-    print("fake Centauri Carbon 2 on http://127.0.0.1:%d, token %s" % (PORT, TOKEN), flush=True)
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    print("fake Centauri Carbon 2 on http://%s:%d, token %s" % (HOST, PORT, TOKEN), flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

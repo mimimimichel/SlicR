@@ -100,8 +100,11 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(201, {"done": True, "files": {target: {"name": name, "path": name}}})
 
 
+HOST = sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1"
+
+
 if __name__ == "__main__":
-    print("fake OctoPrint on http://127.0.0.1:%d, key %s" % (PORT, API_KEY), flush=True)
+    print("fake OctoPrint on http://%s:%d, key %s" % (HOST, PORT, API_KEY), flush=True)
     # Threading, because a browser holds its connection open between requests
     # and a single-threaded server would make everything else wait on it.
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

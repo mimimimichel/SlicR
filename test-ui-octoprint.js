@@ -5,14 +5,16 @@
  * stand-in OctoPrint answers it, and the test reads back the bytes that
  * arrived.
  *
- *   python3 -m http.server 8099        (from the repo root)
- *   python3 test-octoprint-server.py   (in another shell)
+ *   python3 -m http.server 8099                             (from the repo root)
+ *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2  (in another shell)
  *   node test-ui-octoprint.js
  */
 const { chromium } = require('playwright');
 
 const APP = process.env.APP || 'http://localhost:8099/index.html';
-const OCTO = process.env.OCTO || '127.0.0.1:5099';
+// The stand-ins sit on two loopback addresses so the Device tab's sweep can
+// tell them apart the way it would tell apart two machines on a real network.
+const OCTO = process.env.OCTO || '127.0.0.2:5099';
 const KEY = process.env.OCTO_KEY || 'TESTKEY';
 
 (async () => {
@@ -34,7 +36,7 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
   const openMachineTab = async () => {
     await page.click('#btn-panel').catch(() => {});
     await page.waitForTimeout(250);
-    await page.click('[data-tab="machine"]');
+    await page.click('[data-tab="device"]');
     await page.waitForTimeout(250);
   };
   const closePanel = async () => {
@@ -50,8 +52,8 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
     await page.locator('#btn-send').isHidden());
 
   await openMachineTab();
-  const section = page.locator('.sl-section', { hasText: 'Send to the printer' }).first();
-  ok('the Machine tab has a send section', await section.count() === 1);
+  const section = page.locator('.sl-section', { hasText: 'Connection' }).first();
+  ok('the Device tab has a connection section', await section.count() === 1);
   await section.locator('summary').click();
   await page.waitForTimeout(200);
   await page.selectOption('#link-kind', 'octoprint');
@@ -119,7 +121,7 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
 
   // Now ask for it to print, and confirm the warning it puts up first.
   await openMachineTab();
-  await page.locator('.sl-section', { hasText: 'Send to the printer' }).first()
+  await page.locator('.sl-section', { hasText: 'Connection' }).first()
     .locator('input[type="checkbox"]').first().check({ force: true });
   await page.waitForTimeout(200);
   await closePanel();
@@ -154,7 +156,7 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
   await page.selectOption('#sel-printer', 'prusa_mini');
   await page.waitForTimeout(400);
   await openMachineTab();
-  const kept = await page.locator('.sl-section', { hasText: 'Send to the printer' }).first()
+  const kept = await page.locator('.sl-section', { hasText: 'Connection' }).first()
     .locator('input[type="text"]').first().inputValue();
   ok('the address survives changing the printer profile (' + kept + ')', kept === OCTO);
 

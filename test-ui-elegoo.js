@@ -5,8 +5,8 @@
  * token, the digest — and reassembles the chunks, so this test can say whether
  * the file arrived whole rather than merely whether the requests looked right.
  *
- *   python3 -m http.server 8099      (from the repo root)
- *   python3 test-elegoo-server.py    (in another shell)
+ *   python3 -m http.server 8099                            (from the repo root)
+ *   python3 test-elegoo-server.py 5098 123456 127.0.0.1     (in another shell)
  *   node test-ui-elegoo.js
  */
 const { chromium } = require('playwright');
@@ -29,12 +29,12 @@ const PRINTER = process.env.PRINTER || '127.0.0.1:5098';
     else { fail++; console.log('  FAIL  ' + label + (detail ? '  -> ' + detail : '')); }
   };
   const received = async () => (await fetch('http://' + PRINTER + '/_received')).json();
-  const section = () => page.locator('.sl-section', { hasText: 'Send to the printer' }).first();
+  const section = () => page.locator('.sl-section', { hasText: 'Connection' }).first();
 
   const openMachineTab = async () => {
     await page.click('#btn-panel').catch(() => {});
     await page.waitForTimeout(250);
-    await page.click('[data-tab="machine"]');
+    await page.click('[data-tab="device"]');
     await page.waitForTimeout(250);
   };
   const closePanel = async () => {

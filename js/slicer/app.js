@@ -39,7 +39,9 @@
     adviceDismissed: {},
     // Where a finished file gets sent, if anywhere. One connection, one kind.
     link: { kind: 'none', url: '', key: '', autoStart: false },
-    sending: false
+    sending: false,
+    // The sweep of the local network, and what it turned up.
+    scan: { running: false, base: '', found: [], done: false, error: '', cancel: false }
   };
 
   // ---------------------------------------------------------------------------
@@ -451,12 +453,167 @@
     return false;   // the CC2 takes commands over MQTT, which no browser speaks
   }
 
+  /**
+   * The Device tab: what this app is connected to, and what is on the network.
+   *
+   * A browser cannot broadcast, so "find my printer" is a sweep of one subnet:
+   * knock on every address and see who answers. Devices that let the page read
+   * their answer name themselves; the rest are still listed, because an address
+   * that answered is worth more than an empty box to type into.
+   */
+  function renderDeviceTab(body) {
+    var connected = document.createElement('div');
+    connected.className = 'sl-check-banner ' + (linkReady() ? 'pass' : 'warn');
+    var title = document.createElement('b');
+    title.textContent = linkReady()
+      ? 'Connected to ' + linkName(state.link.kind)
+      : 'No printer connected';
+    connected.appendChild(title);
+    connected.appendChild(document.createTextNode(linkReady()
+      ? state.link.url + (linkCanStart() ? '' : ' — uploads only; this machine is started from its own screen')
+      : 'Find one below, or enter its address by hand. Sliced files can then be sent straight to it.'));
+    body.appendChild(connected);
+
+    renderScanner(body);
+    renderPrinterLink(body);
+  }
+
+  function renderScanner(body) {
+    var box = document.createElement('details');
+    box.className = 'sl-section';
+    box.open = true;
+    var summary = document.createElement('summary');
+    summary.textContent = 'Find a printer on this network';
+    box.appendChild(summary);
+
+    if (!window.OrcaDiscover) {
+      var missing = document.createElement('div');
+      missing.className = 'sl-hint';
+      missing.textContent = 'The network scanner did not load.';
+      box.appendChild(missing);
+      body.appendChild(box);
+      return;
+    }
+
+    if (!state.scan.base) {
+      state.scan.base = window.OrcaDiscover.guessBase() || '192.168.1';
+    }
+
+    var baseInput = octoInput('text', '192.168.1', state.scan.base, function (v) {
+      state.scan.base = v.replace(/\.+$/, '');
+    });
+    baseInput.id = 'scan-base';
+    box.appendChild(octoRow('Subnet',
+      window.OrcaDiscover.guessBase()
+        ? 'Taken from this page\'s own address'
+        : 'The first three numbers of your network\'s addresses',
+      baseInput));
+
+    var row = document.createElement('div');
+    row.className = 'sl-row';
+    var go = document.createElement('button');
+    go.className = 'sl-btn primary';
+    go.type = 'button';
+    go.id = 'btn-scan';
+    go.textContent = state.scan.running ? 'Stop' : 'Scan';
+    go.onclick = function () {
+      if (state.scan.running) { state.scan.cancel = true; return; }
+      startScan();
+    };
+    row.appendChild(go);
+    box.appendChild(row);
+
+    var status = document.createElement('div');
+    status.className = 'sl-hint';
+    status.id = 'scan-status';
+    status.textContent = state.scan.running
+      ? 'Knocking on every address in ' + state.scan.base + '.1 to .254 — this takes a moment.'
+      : (state.scan.error ? state.scan.error
+        : (state.scan.done
+          ? (state.scan.found.length
+            ? state.scan.found.length + ' device' + (state.scan.found.length > 1 ? 's' : '') + ' answered.'
+            : 'Nothing answered on ' + state.scan.base + '. Check the subnet, or enter the address by hand below.')
+          : 'A browser cannot broadcast, so this knocks on each address in turn. ' +
+            'The app can ask the network properly; a web page cannot.'));
+    box.appendChild(status);
+
+    state.scan.found.forEach(function (device) {
+      var card = document.createElement('div');
+      card.className = 'sl-advice-item' + (device.identified ? '' : ' warning');
+
+      var name = document.createElement('div');
+      name.className = 'msg';
+      name.textContent = device.identified
+        ? device.name + ' — ' + device.label
+        : 'Something answered at ' + window.OrcaDiscover.addressOf(device);
+      card.appendChild(name);
+
+      var detail = document.createElement('div');
+      detail.className = 'why';
+      detail.textContent = device.identified
+        ? window.OrcaDiscover.addressOf(device) + (device.serial ? ' · ' + device.serial : '')
+        : 'It would not let this page read its answer, which most printers do not. ' +
+          'Pick the kind below and test it.';
+      card.appendChild(detail);
+
+      var actions = document.createElement('div');
+      actions.className = 'sl-advice-actions';
+      var use = document.createElement('button');
+      use.className = 'sl-btn primary';
+      use.type = 'button';
+      use.textContent = 'Use this one';
+      use.onclick = function () {
+        state.link.url = window.OrcaDiscover.addressOf(device);
+        if (device.identified) state.link.kind = device.kind;
+        else if (state.link.kind === 'none') state.link.kind = 'elegoo_cc2';
+        saveLink();
+        updateSendButton();
+        renderPanel();
+      };
+      actions.appendChild(use);
+      card.appendChild(actions);
+      box.appendChild(card);
+    });
+
+    body.appendChild(box);
+  }
+
+  function startScan() {
+    state.scan.running = true;
+    state.scan.cancel = false;
+    state.scan.done = false;
+    state.scan.error = '';
+    state.scan.found = [];
+    renderPanel();
+
+    window.OrcaDiscover.scan({
+      base: state.scan.base,
+      // An OctoPrint says nothing without its key. If one has been entered
+      // already, the sweep can use it and the machine names itself.
+      key: state.link.kind === 'octoprint' ? state.link.key : '',
+      onFound: function (device) {
+        state.scan.found.push(device);
+        if (state.tab === 'device') renderPanel();
+      },
+      cancelled: function () { return state.scan.cancel; }
+    }).then(function (found) {
+      state.scan.found = found;
+      state.scan.running = false;
+      state.scan.done = true;
+      if (state.tab === 'device') renderPanel();
+    }, function (err) {
+      state.scan.running = false;
+      state.scan.error = err.message;
+      if (state.tab === 'device') renderPanel();
+    });
+  }
+
   function renderPrinterLink(body) {
     var details = document.createElement('details');
     details.className = 'sl-section';
     if (state.link.kind !== 'none') details.open = true;
     var summary = document.createElement('summary');
-    summary.textContent = 'Send to the printer';
+    summary.textContent = 'Connection';
     details.appendChild(summary);
 
     var kindSel = document.createElement('select');
@@ -659,6 +816,7 @@
     body.innerHTML = '';
     if (state.tab === 'object') { renderObjectTab(body); return; }
     if (state.tab === 'check') { renderCheckTab(body); return; }
+    if (state.tab === 'device') { renderDeviceTab(body); return; }
     if (state.tab === 'print' && presetsBelong() === 'panel') body.appendChild(state.presetsEl);
     if (state.tab === 'print') renderAdvice(body);
     var sections = state.tab === 'machine' ? MACHINE_SECTIONS : PRINT_SECTIONS;
@@ -693,7 +851,6 @@
       return;
     }
 
-    if (state.tab === 'machine') renderPrinterLink(body);
 
     sections.forEach(function (section) {
       var details = document.createElement('details');
