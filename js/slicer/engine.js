@@ -3713,11 +3713,41 @@
 
     // --- cooling pass: work out which layers need slowing down --------------
     var scales = new Float64Array(layers.length);
+    var layerSeconds = new Float64Array(layers.length);
     for (var p = 0; p < layers.length; p++) {
       scales[p] = 1;
-      if (!s.minLayerTime || !layers[p].feats.length) continue;
+      if (!layers[p].feats.length) continue;
       var seconds = estimateLayerSeconds(layers[p], p, s);
+      layerSeconds[p] = seconds;
+      if (!s.minLayerTime) continue;
       if (seconds > 0 && seconds < s.minLayerTime) scales[p] = seconds / s.minLayerTime;
+    }
+
+    /**
+     * How much air this layer gets.
+     *
+     * One number for the whole print is a compromise nobody asked for: PETG on
+     * a big layer wants almost none, and the same PETG on a four-second layer
+     * wants everything there is or the next one lands on something soft. So the
+     * fan moves between the filament's own two figures by how long the layer
+     * actually takes — full at the point where the print is already being
+     * slowed for cooling, down to the minimum by the time a layer takes long
+     * enough to set on its own. Where the two figures are the same, which is
+     * what the vendors publish for PLA, nothing moves.
+     */
+    function fanForLayer(index) {
+      var max = s.fanSpeed;
+      var min = s.minFanSpeed != null ? s.minFanSpeed : max;
+      if (min >= max) return max;
+      var quick = Math.max(0.5, s.minLayerTime || 4);
+      var slow = Math.max(quick + 0.5, s.fanCoolingTime || 100);
+      // The time the layer will really take, which is not the time it would
+      // have taken before it was slowed down for this very reason.
+      var took = scales[index] < 1 ? quick : layerSeconds[index];
+      if (!(took > 0)) return max;
+      if (took <= quick) return max;
+      if (took >= slow) return min;
+      return min + (max - min) * (slow - took) / (slow - quick);
     }
 
     var tempSwitched = false;
@@ -3776,8 +3806,9 @@
 
       // Cooling: a layer that prints too fast to set gets slowed and blown on.
       var scale = scales[Li];
-      baseFan = Lo + 1 >= s.fanFromLayer ? Math.round(s.fanSpeed * 2.55) : Math.round(s.firstLayerFanSpeed * 2.55);
-      if (scale < 1) baseFan = Math.max(baseFan, Math.round(s.fanSpeed * 2.55));
+      baseFan = Lo + 1 >= s.fanFromLayer
+        ? Math.round(fanForLayer(Li) * 2.55)
+        : Math.round(s.firstLayerFanSpeed * 2.55);
       setFan(baseFan);
 
       if (s.layerGcode) {
@@ -3821,9 +3852,13 @@
         out.push(';TYPE:' + (f.primeTower ? 'Prime tower' : (GCODE_TYPE[f.type] || f.type)));
 
         // Bridges and far overhangs get everything the fan has.
+        // A bead over air gets the filament's own overhang figure, never less
+        // than the layer is already getting.
         if (f.type === FEATURE.BRIDGE || f.type === FEATURE.INTERNAL_BRIDGE ||
-            (s.overhangFanBoost && f.overhang >= 2)) setFan(255);
-        else setFan(baseFan);
+            (s.overhangFanBoost && f.overhang >= 2)) {
+          var boost = s.overhangFanSpeed != null ? s.overhangFanSpeed : 100;
+          setFan(Math.max(baseFan, Math.round(boost * 2.55)));
+        } else setFan(baseFan);
 
         var speed = effectiveSpeed(f, Lo, layer.h, s);
         if (scale < 1) speed = Math.max(s.slowDownMinSpeed, speed * scale);

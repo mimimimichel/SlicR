@@ -838,10 +838,23 @@
       firstLayerNozzleTemp: opts.temp1 != null ? opts.temp1 : opts.temp + 5,
       bedTemp: opts.bed,
       firstLayerBedTemp: opts.bed1 != null ? opts.bed1 : opts.bed,
+      // Cooling is not one number. A layer that takes a minute has all the time
+      // it needs and wants as little air as the plastic will accept; one that
+      // takes four seconds needs everything the fan has or the next lands on
+      // something still soft. So `fan` is the most this plastic ever gets, and
+      // `fanMin` the least — the writer moves between them by how long the
+      // layer actually takes, reaching the minimum at `fanCooling` seconds.
+      // The numbers are the vendor's, per family, not a rule of thumb.
       fanSpeed: opts.fan,
       firstLayerFanSpeed: opts.fan1 != null ? opts.fan1 : 0,
       fanFromLayer: opts.fanFrom || 2,
-      minFanSpeed: opts.minFan != null ? opts.minFan : Math.min(opts.fan, 30),
+      minFanSpeed: opts.fanMin != null ? opts.fanMin : opts.fan,
+      fanCoolingTime: opts.fanCooling != null ? opts.fanCooling : 100,
+      // A bead reaching over air has nothing to conduct its heat into, so it
+      // gets more than the layer does — but not always everything: nylon set
+      // hard by a fan curls off the part it is hanging from. The vendors
+      // publish this one too.
+      overhangFanSpeed: opts.overhangFan != null ? opts.overhangFan : 100,
       flowRatio: opts.flow != null ? opts.flow : 0.98,
       density: opts.density,
       costPerKg: opts.cost,
@@ -853,24 +866,24 @@
   }
 
   var FILAMENTS = {
-    pla:        filament('PLA',            { temp: 210, bed: 60,  fan: 100, fan1: 0, vol: 15, density: 1.24, cost: 20, color: '#6366f1' }),
-    pla_fast:   filament('PLA High Speed', { temp: 220, bed: 60,  fan: 100, fan1: 0, vol: 24, density: 1.24, cost: 24, color: '#818cf8', minLayerTime: 3 }),
-    pla_silk:   filament('PLA Silk',       { temp: 225, bed: 60,  fan: 80,  fan1: 0, vol: 12, density: 1.25, cost: 26, color: '#c4b5fd', flow: 1.0 }),
-    pla_cf:     filament('PLA-CF',         { temp: 225, bed: 60,  fan: 100, fan1: 0, vol: 13, density: 1.22, cost: 38, color: '#4b5563', flow: 0.96 }),
-    petg:       filament('PETG',           { temp: 240, bed: 80,  fan: 50,  fan1: 0, vol: 12, density: 1.27, cost: 24, color: '#22d3ee', flow: 0.95, fanFrom: 3 }),
-    petg_cf:    filament('PETG-CF',        { temp: 250, bed: 80,  fan: 40,  fan1: 0, vol: 11, density: 1.30, cost: 42, color: '#0e7490', flow: 0.94, fanFrom: 3 }),
-    abs:        filament('ABS',            { temp: 255, bed: 100, fan: 20,  fan1: 0, vol: 14, density: 1.04, cost: 22, color: '#fb7185', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
-    abs_cf:     filament('ABS-CF',         { temp: 265, bed: 100, fan: 15,  fan1: 0, vol: 13, density: 1.08, cost: 40, color: '#9f1239', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
-    asa:        filament('ASA',            { temp: 260, bed: 100, fan: 20,  fan1: 0, vol: 14, density: 1.07, cost: 28, color: '#fbbf24', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
-    tpu95:      filament('TPU 95A',        { temp: 230, bed: 40,  fan: 60,  fan1: 0, vol: 4,  density: 1.21, cost: 35, color: '#a855f7', flow: 1.05 }),
-    tpu85:      filament('TPU 85A',        { temp: 225, bed: 35,  fan: 70,  fan1: 0, vol: 2.5, density: 1.15, cost: 42, color: '#c084fc', flow: 1.08 }),
-    pa:         filament('PA (Nylon)',     { temp: 270, bed: 90,  fan: 20,  fan1: 0, vol: 12, density: 1.14, cost: 55, color: '#34d399', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
-    pa_cf:      filament('PA-CF',          { temp: 285, bed: 100, fan: 20,  fan1: 0, vol: 12, density: 1.18, cost: 75, color: '#047857', fanFrom: 4, chamber: 60, minLayerTime: 8 }),
-    pc:         filament('PC',             { temp: 275, bed: 105, fan: 15,  fan1: 0, vol: 12, density: 1.20, cost: 45, color: '#94a3b8', fanFrom: 4, chamber: 60, minLayerTime: 10 }),
-    hips:       filament('HIPS',           { temp: 240, bed: 100, fan: 30,  fan1: 0, vol: 12, density: 1.04, cost: 26, color: '#e2e8f0', fanFrom: 3 }),
+    pla:        filament('PLA',            { temp: 210, bed: 60,  fan: 100, fanMin: 100, fanCooling: 100, fan1: 0, vol: 15, density: 1.24, cost: 20, color: '#6366f1' }),
+    pla_fast:   filament('PLA High Speed', { temp: 220, bed: 60,  fan: 100, fanMin: 100, fanCooling: 100, fan1: 0, vol: 24, density: 1.24, cost: 24, color: '#818cf8', minLayerTime: 3 }),
+    pla_silk:   filament('PLA Silk',       { temp: 225, bed: 60,  fan: 100, fanMin: 100, fanCooling: 100,  fan1: 0, vol: 12, density: 1.25, cost: 26, color: '#c4b5fd', flow: 1.0 }),
+    pla_cf:     filament('PLA-CF',         { temp: 225, bed: 60,  fan: 100, fanMin: 100, fanCooling: 100, fan1: 0, vol: 13, density: 1.22, cost: 38, color: '#4b5563', flow: 0.96 }),
+    petg:       filament('PETG',           { temp: 240, bed: 80,  fan: 100, fanMin: 20, overhangFan: 100, fanCooling: 20,  fan1: 0, vol: 12, density: 1.27, cost: 24, color: '#22d3ee', flow: 0.95, fanFrom: 3 }),
+    petg_cf:    filament('PETG-CF',        { temp: 250, bed: 80,  fan: 100, fanMin: 20, overhangFan: 100, fanCooling: 20,  fan1: 0, vol: 11, density: 1.30, cost: 42, color: '#0e7490', flow: 0.94, fanFrom: 3 }),
+    abs:        filament('ABS',            { temp: 255, bed: 100, fan: 80,  fanMin: 10, overhangFan: 80, fanCooling: 30,  fan1: 0, vol: 14, density: 1.04, cost: 22, color: '#fb7185', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
+    abs_cf:     filament('ABS-CF',         { temp: 265, bed: 100, fan: 80,  fanMin: 10, overhangFan: 80, fanCooling: 30,  fan1: 0, vol: 13, density: 1.08, cost: 40, color: '#9f1239', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
+    asa:        filament('ASA',            { temp: 260, bed: 100, fan: 80,  fanMin: 10, overhangFan: 80, fanCooling: 35,  fan1: 0, vol: 14, density: 1.07, cost: 28, color: '#fbbf24', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
+    tpu95:      filament('TPU 95A',        { temp: 230, bed: 40,  fan: 100, fanMin: 100, fanCooling: 100,  fan1: 0, vol: 4,  density: 1.21, cost: 35, color: '#a855f7', flow: 1.05 }),
+    tpu85:      filament('TPU 85A',        { temp: 225, bed: 35,  fan: 100, fanMin: 100, fanCooling: 100,  fan1: 0, vol: 2.5, density: 1.15, cost: 42, color: '#c084fc', flow: 1.08 }),
+    pa:         filament('PA (Nylon)',     { temp: 270, bed: 90,  fan: 60,  fanMin: 0,  overhangFan: 30, fanCooling: 4,  fan1: 0, vol: 12, density: 1.14, cost: 55, color: '#34d399', fanFrom: 4, chamber: 50, minLayerTime: 8 }),
+    pa_cf:      filament('PA-CF',          { temp: 285, bed: 100, fan: 60,  fanMin: 0,  overhangFan: 30, fanCooling: 4,  fan1: 0, vol: 12, density: 1.18, cost: 75, color: '#047857', fanFrom: 4, chamber: 60, minLayerTime: 8 }),
+    pc:         filament('PC',             { temp: 275, bed: 105, fan: 60,  fanMin: 10, overhangFan: 60, fanCooling: 30,  fan1: 0, vol: 12, density: 1.20, cost: 45, color: '#94a3b8', fanFrom: 4, chamber: 60, minLayerTime: 10 }),
+    hips:       filament('HIPS',           { temp: 240, bed: 100, fan: 60,  fanMin: 0,  overhangFan: 80, fanCooling: 10,  fan1: 0, vol: 12, density: 1.04, cost: 26, color: '#e2e8f0', fanFrom: 3 }),
     pvа_placeholder: null,
-    pva:        filament('PVA (soluble)',  { temp: 215, bed: 60,  fan: 50,  fan1: 0, vol: 5,  density: 1.23, cost: 80, color: '#fde68a' }),
-    pp:         filament('PP',             { temp: 245, bed: 90,  fan: 40,  fan1: 0, vol: 10, density: 0.90, cost: 48, color: '#67e8f9', flow: 1.0, fanFrom: 3 })
+    pva:        filament('PVA (soluble)',  { temp: 215, bed: 60,  fan: 100, fanMin: 100, fanCooling: 100,  fan1: 0, vol: 5,  density: 1.23, cost: 80, color: '#fde68a' }),
+    pp:         filament('PP',             { temp: 245, bed: 90,  fan: 100, fanMin: 100, fanCooling: 100,  fan1: 0, vol: 10, density: 0.90, cost: 48, color: '#67e8f9', flow: 1.0, fanFrom: 3 })
   };
   delete FILAMENTS.pvа_placeholder;
 
@@ -999,6 +1012,8 @@
       chamberTemp: f.chamberTemp,
       fanSpeed: f.fanSpeed, firstLayerFanSpeed: f.firstLayerFanSpeed,
       minFanSpeed: f.minFanSpeed,
+      fanCoolingTime: f.fanCoolingTime,
+      overhangFanSpeed: f.overhangFanSpeed,
       fanFromLayer: f.fanFromLayer,
       flowRatio: f.flowRatio,
       filamentDensity: f.density,

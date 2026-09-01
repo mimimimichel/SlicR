@@ -182,7 +182,14 @@
     { title: 'Cooling', fields: [
       { key: 'minLayerTime', label: 'Minimum layer time', unit: 's', hint: 'Slow down so layers can set', min: 0, max: 60, step: 1 },
       { key: 'slowDownMinSpeed', label: 'Slow-down floor', unit: 'mm/s', min: 1, max: 60, step: 1 },
-      { key: 'fanSpeed', label: 'Fan', unit: '%', min: 0, max: 100, step: 5 },
+      { key: 'fanSpeed', label: 'Fan, quick layers', unit: '%', min: 0, max: 100, step: 5,
+        hint: 'The most this filament ever gets' },
+      { key: 'minFanSpeed', label: 'Fan, slow layers', unit: '%', min: 0, max: 100, step: 5,
+        hint: 'What a layer with time to cool on its own gets' },
+      { key: 'fanCoolingTime', label: 'Slow layer means', unit: 's', min: 2, max: 200, step: 1,
+        hint: 'A layer taking this long gets the minimum; a quick one gets the maximum' },
+      { key: 'overhangFanSpeed', label: 'Fan over air', unit: '%', min: 0, max: 100, step: 5,
+        hint: 'What a bridge or a far overhang gets' },
       { key: 'firstLayerFanSpeed', label: 'Fan, first layer', unit: '%', min: 0, max: 100, step: 5 },
       { key: 'fanFromLayer', label: 'Fan from layer', min: 1, max: 20, step: 1 }
     ]},
@@ -243,7 +250,9 @@
       { key: 'firstLayerBedTemp', label: 'Bed, first layer', unit: '°C', min: 0, max: 160, step: 1 },
       { key: 'bedTemp', label: 'Bed, other layers', unit: '°C', min: 0, max: 160, step: 1 },
       { key: 'firstLayerFanSpeed', label: 'Fan, first layer', unit: '%', min: 0, max: 100, step: 5 },
-      { key: 'fanSpeed', label: 'Fan', unit: '%', min: 0, max: 100, step: 5 },
+      { key: 'fanSpeed', label: 'Fan, quick layers', unit: '%', min: 0, max: 100, step: 5 },
+      { key: 'minFanSpeed', label: 'Fan, slow layers', unit: '%', min: 0, max: 100, step: 5 },
+      { key: 'fanCoolingTime', label: 'Slow layer means', unit: 's', min: 2, max: 200, step: 1 },
       { key: 'fanFromLayer', label: 'Fan from layer', min: 1, max: 20, step: 1 },
       { key: 'chamberTemp', label: 'Chamber', unit: '°C', hint: '0 disables the command', min: 0, max: 120, step: 1 }
     ]},
