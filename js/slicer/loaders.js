@@ -27,7 +27,13 @@
     var o = 84;
     for (var i = 0; i < count; i++) {
       o += 12;                                   // skip the stored normal
-      for (var v = 0; v < 9; v++) { out[i * 9 + v] = view.getFloat32(o, true); o += 4; }
+      for (var v = 0; v < 9; v++) {
+        var f = view.getFloat32(o, true);
+        // A corrupt float in a binary STL is still nine bytes of file; reading
+        // it as a coordinate poisons every measurement taken afterwards.
+        out[i * 9 + v] = isFinite(f) ? f : 0;
+        o += 4;
+      }
       o += 2;                                    // attribute byte count
     }
     return out;
@@ -37,7 +43,13 @@
     var verts = [];
     var re = /vertex\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)/g;
     var m;
-    while ((m = re.exec(text)) !== null) verts.push(+m[1], +m[2], +m[3]);
+    while ((m = re.exec(text)) !== null) {
+      var x = +m[1], y = +m[2], z = +m[3];
+      // A corner that does not parse is not a corner. Dropping the three
+      // numbers keeps the rest of the file, which is what a repair tool would
+      // leave behind anyway.
+      if (isFinite(x) && isFinite(y) && isFinite(z)) verts.push(x, y, z);
+    }
     var usable = Math.floor(verts.length / 9) * 9;
     return new Float32Array(verts.slice(0, usable));
   }
@@ -65,12 +77,22 @@
           if (isNaN(n)) continue;
           idx.push(n < 0 ? (vx.length / 3) + n : n - 1);
         }
+        var count = vx.length / 3;
         for (var k = 1; k + 1 < idx.length; k++) {                            // fan-triangulate
           var tri = [idx[0], idx[k], idx[k + 1]];
+          // A face naming a corner the file never gave is not a triangle. Left
+          // in, it becomes three NaNs, and one bad line loses the whole model
+          // rather than one face of it.
+          if (tri[0] < 0 || tri[0] >= count ||
+              tri[1] < 0 || tri[1] >= count ||
+              tri[2] < 0 || tri[2] >= count) continue;
+          var bad = false, buf = [];
           for (var t = 0; t < 3; t++) {
             var b = tri[t] * 3;
-            out.push(vx[b], vx[b + 1], vx[b + 2]);
+            if (!isFinite(vx[b]) || !isFinite(vx[b + 1]) || !isFinite(vx[b + 2])) { bad = true; break; }
+            buf.push(vx[b], vx[b + 1], vx[b + 2]);
           }
+          if (!bad) out.push.apply(out, buf);
         }
       }
     }
@@ -251,4 +273,7 @@
     parse3MF: parse3MF,
     unzip: unzip
   };
+  // Exported like every other module, so the parsers can be held to a pile of
+  // damaged files without a browser.
+  if (typeof module !== 'undefined' && module.exports) module.exports = root.OrcaLoaders;
 })(typeof globalThis !== 'undefined' ? globalThis : window);
