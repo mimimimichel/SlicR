@@ -509,7 +509,14 @@
           'G90/G91 and M82/M83 survive between prints, so this file does whatever ' +
           'the last one left behind. Send them before the first move.');
       }
-      if (hasAxis && !st.positionKnown) {
+      // One move is not only allowed before homing but wanted: lifting Z. A bed
+      // slinger homes X and Y first, and drags the nozzle across the plate from
+      // wherever the last print left it — so the machine's own script raises Z
+      // first, from a position the controller reads as zero. Going up from an
+      // unknown height is the safe direction; anything else is not.
+      var safeLift = !st.inBody && w.X === undefined && w.Y === undefined &&
+        w.E === undefined && w.Z !== undefined && w.Z > 0 && st.absXYZ;
+      if (hasAxis && !st.positionKnown && !safeLift) {
         add(ERROR, 'move.unhomed', 'The machine is moved before it has been homed', lineNo, raw,
           'The controller assumes it is at the origin, so this move can drive the head into the frame or the bed.');
         st.positionKnown = true;    // report once, then carry on simulating

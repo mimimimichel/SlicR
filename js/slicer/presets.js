@@ -48,11 +48,17 @@
   // ---------------------------------------------------------------------------
 
   var STARTS = {
+    // Warm before homing, not hot: every vendor profile I have compared this
+    // against sets 150 °C for the homing move and only then goes to temperature.
+    // A nozzle brought straight to 215 drools onto the plate while the machine
+    // homes, and then drags through what it left.
     standard: [
+      'G90 ; absolute coordinates',
       'M140 S{bed_temp} ; set bed temp',
-      'M104 S{nozzle_temp} ; set nozzle temp',
+      'M104 S{min(150, nozzle_temp)} ; warm, not hot enough to drool',
       'G28 ; home all axes',
       'M190 S{bed_temp} ; wait for bed',
+      'M104 S{nozzle_temp} ; set nozzle temp',
       'M109 S{nozzle_temp} ; wait for nozzle',
       'G92 E0',
       'G1 Z2.0 F{z_feed}',
@@ -63,19 +69,94 @@
       'G92 E0'
     ].join('\n'),
 
+    // Same, plus the stored mesh. M420 loads what the machine already measured;
+    // G29 re-probes the whole bed on every print, which is what this used to
+    // send. No vendor profile does that — Sovol load the mesh, Creality and
+    // Anycubic leave it to the firmware — and on a machine set up for manual
+    // mesh levelling a bare G29 starts an interactive procedure and waits.
     mesh: [
+      'G90 ; absolute coordinates',
       'M140 S{bed_temp}',
-      'M104 S{nozzle_temp}',
+      'M104 S{min(150, nozzle_temp)} ; warm, not hot enough to drool',
       'G28 ; home all axes',
+      'M420 S1 ; use the mesh the machine has stored',
       'M190 S{bed_temp}',
+      'M104 S{nozzle_temp}',
       'M109 S{nozzle_temp}',
-      'G29 ; bed levelling / load mesh',
       'G92 E0',
       'G1 Z2.0 F{z_feed}',
       'G1 X5 Y20 Z0.3 F5000',
       'G1 X5 Y{prime_end} Z0.3 F1500 E15 ; prime line',
       'G1 X5.4 Y{prime_end} Z0.3 F5000',
       'G1 X5.4 Y20 Z0.3 F1500 E30 ; prime line back',
+      'G92 E0'
+    ].join('\n'),
+
+    // Elegoo's Neptune 4 family, from their own machine G-code. It levels in
+    // firmware and has no G29 — Klipper does not have that command at all, and
+    // refuses a file that uses it.
+    neptune4: [
+      'M400 ; let the buffer drain',
+      'M220 S100 ; feed rate back to 100%',
+      'M221 S100 ; flow rate back to 100%',
+      'M104 S140 ; warm, not hot enough to drool',
+      'M190 S{bed_temp} ; wait for the bed',
+      'G90',
+      'G28 ; home',
+      'G1 Z10 F300',
+      'G1 X{purge_end} Y0.5 F6000',
+      'G1 Z0.4 F300',
+      'M109 S{nozzle_temp} ; wait for the nozzle',
+      'G92 E0',
+      'G1 X{purge_far} E30 F400 ; prime line along the front edge',
+      'G1 Z0.6 F120 ; up off the line',
+      'G1 X{purge_back} F3000',
+      'G92 E0'
+    ].join('\n'),
+
+    // The Sidewinders and the Genius, from Artillery's own machine G-code. Three
+    // things here that the generic script does not do, in the order they matter:
+    // the Z lift BEFORE homing, because a bed slinger homes X and Y first and
+    // drags the nozzle across the plate from wherever the last print left it;
+    // M420 to actually switch the mesh on after probing it; and M200 D0, since
+    // volumetric extrusion left on by another job silently rescales every E in
+    // this one.
+    artillery: [
+      'G90 ; absolute coordinates',
+      'M83 ; relative extrusion for the prime',
+      'M200 D0 ; volumetric extrusion off',
+      'M220 S100 ; feed rate back to 100%',
+      'M221 S100 ; flow rate back to 100%',
+      'M190 S{bed_temp} ; wait for the bed',
+      'M104 S{nozzle_temp} ; start the nozzle, do not wait',
+      'G1 Z3 F3000 ; up off the plate before homing drags across it',
+      'G28 ; home',
+      'G1 X3 Y3 F5000 ; ooze in the corner, not over the print',
+      'M109 S{nozzle_temp} ; wait for the nozzle',
+      'M190 S{bed_temp}',
+      '{abl}',
+      'G92 E0',
+      'G1 Z3 F3000',
+      'G1 X10 Y0.5 Z0.25 F5000 ; prime line along the front edge',
+      'G1 X100 Y0.5 Z0.25 F1500 E15',
+      'G1 X100 Y0.2 Z0.25 F5000',
+      'G1 X10 Y0.2 Z0.25 F1500 E15',
+      'G92 E0'
+    ].join('\n'),
+
+    // The X3 and X4 generation has the wipe and the prime line in firmware.
+    artillery_x3: [
+      'G90 ; absolute coordinates',
+      'M200 D0 ; volumetric extrusion off',
+      'M220 S100',
+      'M221 S100',
+      'M104 S140 ; warm, not hot enough to drool',
+      'M190 S{bed_temp} ; wait for the bed',
+      'G1 Z3 F3000 ; up off the plate before homing drags across it',
+      'G28 ; home',
+      'NOZZLE_WIPE',
+      'M109 S{nozzle_temp} ; wait for the nozzle',
+      'DRAW_LINE_ONLY ; the machine primes itself',
       'G92 E0'
     ].join('\n'),
 
@@ -283,6 +364,38 @@
       'M84 ; motors off'
     ].join('\n'),
 
+    neptune4: [
+      'G90 ; absolute',
+      'M83 ; the retract below is a distance',
+      'G92 E0',
+      'G1 E-1.5 F1800 ; retract',
+      'G2 I1 J0 Z{max_z + 0.5} F3000 ; curl away from the part',
+      'G90',
+      'G1 X10 Y{present_y} Z{min(max_z + 50, bed_z)} E-5 F{z_feed} ; present the print',
+      'M106 S0 ; fan off',
+      'M104 S0 ; nozzle off',
+      'M140 S0 ; bed off',
+      'M84 X Y E ; motors off, Z still holding'
+    ].join('\n'),
+
+    artillery: [
+      'G4 ; let the buffer drain',
+      'M83 ; the retract below is a distance',
+      'G92 E0',
+      'G1 E-0.5 F3000 ; retract so it does not string on the way out',
+      'G91 ; relative',
+      'G1 X1 Y1 F1200 ; wiggle off the last spot',
+      'G90 ; absolute',
+      'G1 Z{min(max_z + 120, bed_z)} F{z_feed} ; run the bed out from under the head',
+      'M200 D0',
+      'M220 S100',
+      'M221 S100',
+      'M106 S0 ; fan off',
+      'M104 S0 ; nozzle off',
+      'M140 S0 ; bed off',
+      'M84 ; motors off'
+    ].join('\n'),
+
     klipper: [
       'END_PRINT',
       'M104 S0',
@@ -416,10 +529,17 @@
       maxSpeed: opts.maxSpeed || 300,
       layerGcode: opts.layerGcode || '',
       startGcode: start
+        // Only the machines that have a probe should be asked to run one: G29
+        // on a printer without one is at best ignored and at worst an error.
+        .replace(/\{abl\}\n?/g, opts.abl
+          ? 'G29 ; probe the bed\nM420 S1 Z3 ; switch the mesh on, fading out by 3 mm\n'
+          : '')
         .replace(/\{prime_end\}/g, Math.max(40, Math.round(by * 0.8)))
         .replace(/\{prime_radius\}/g, Math.round(bx / 2 - 12))
         .replace(/\{bed_x_half\}/g, Math.round(bx / 2))
         .replace(/\{purge_end\}/g, Math.round(bx / 2 - 50))
+        .replace(/\{purge_far\}/g, Math.round(bx / 2 + 50))
+        .replace(/\{purge_back\}/g, Math.round(bx / 2 + 47))
         // A purge line from X5 along the front, and what it costs in filament:
         // a 0.5 by 0.3 mm section is 0.15 mm2, against 3.3 mm2 of 1.75 stock.
         .replace(/\{prime_x\}/g, primeX)
@@ -456,10 +576,12 @@
         // The screen's layer counter reads this, not the ;LAYER comments.
         layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
         maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
-    elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 225, 225, 265,
-      { accel: 4000, travel: 250, retract: 1.0, start: 'mesh', flavor: 'klipper' }),
-    elegoo_neptune4_plus: printer('Elegoo Neptune 4 Plus', 'Elegoo', 320, 320, 350,
-      { accel: 4000, travel: 250, retract: 1.0, start: 'mesh', flavor: 'klipper' }),
+    elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 230, 230, 265,
+      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper',
+        start: 'neptune4', end: 'neptune4' }),
+    elegoo_neptune4_plus: printer('Elegoo Neptune 4 Plus', 'Elegoo', 325, 325, 385,
+      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper',
+        start: 'neptune4', end: 'neptune4' }),
 
     // --- Bambu Lab ---
     bambu_a1: printer('Bambu Lab A1', 'Bambu Lab', 256, 256, 256,
@@ -505,7 +627,7 @@
     // --- Anycubic ---
     anycubic_kobra2: printer('Anycubic Kobra 2 / Neo', 'Anycubic', 220, 220, 250,
       { accel: 2500, travel: 200, retract: 1.5, start: 'mesh' }),
-    anycubic_kobra3: printer('Anycubic Kobra 3', 'Anycubic', 250, 250, 260,
+    anycubic_kobra3: printer('Anycubic Kobra 3', 'Anycubic', 255, 255, 260,
       { accel: 6000, travel: 300, retract: 1.0, start: 'mesh', maxSpeed: 500 }),
 
     // --- Sovol ---
@@ -541,12 +663,18 @@
         start: 'printstart', end: 'printstart', maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 25 }),
 
     // --- Artillery ---
+    // The X1 has no probe; the X2 does, and the mesh has to be switched on after
+    // it is measured. Both are bed slingers that home X and Y before Z, so the
+    // lift that Artillery's own script does first is not optional.
     artillery_x1: printer('Artillery Sidewinder X1', 'Artillery', 300, 300, 400,
-      { accel: 1000, travel: 120, retract: 1.5, zHop: 0 }),
+      { accel: 1000, travel: 120, retract: 1.5, zHop: 0,
+        start: 'artillery', end: 'artillery' }),
     artillery_x2: printer('Artillery Sidewinder X2', 'Artillery', 300, 300, 400,
-      { accel: 1500, travel: 150, retract: 1.5, start: 'mesh' }),
-    artillery_x3: printer('Artillery Sidewinder X3 Plus', 'Artillery', 300, 300, 400,
-      { accel: 3000, travel: 200, retract: 1.2, start: 'mesh', maxSpeed: 300 }),
+      { accel: 1500, travel: 150, retract: 1.5,
+        start: 'artillery', end: 'artillery', abl: true }),
+    artillery_x3: printer('Artillery Sidewinder X3 Plus', 'Artillery', 300, 305, 400,
+      { accel: 3000, travel: 200, retract: 1.2, maxSpeed: 300,
+        start: 'artillery_x3', end: 'artillery' }),
     // No start macro at all on these: the file does the wiping and the priming,
     // and the wiper pad is past the back of the bed and a millimetre below it.
     artillery_x4_plus: printer('Artillery Sidewinder X4 Plus', 'Artillery', 300, 310, 400,
@@ -561,7 +689,7 @@
       { accel: 1000, travel: 120, retract: 1.5, zHop: 0 }),
     artillery_genius_pro: printer('Artillery Genius Pro', 'Artillery', 220, 220, 250,
       { accel: 1500, travel: 150, retract: 1.5, start: 'mesh' }),
-    artillery_hornet: printer('Artillery Hornet', 'Artillery', 220, 220, 250,
+    artillery_hornet: printer('Artillery Hornet', 'Artillery', 230, 230, 250,
       { accel: 1500, travel: 150, retract: 5, retractSpeed: 45, zHop: 0 }),
 
     // --- Deltas (round bed) ---

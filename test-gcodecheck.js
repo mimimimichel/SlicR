@@ -148,5 +148,22 @@ expectCatch('a start script beyond what the machine reaches',
    'M104 S0', 'M140 S0'].join('\n'),
   reachSettings, 'bounds.xy', 'error');
 
+// --- lifting Z before homing is allowed; everything else still is not ---
+// A bed slinger homes X and Y first and drags the nozzle across the plate from
+// wherever the last print left it, so the machine's own script raises Z first.
+var head = ['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200'];
+var tail = [';LAYER:0', ';Z:0.2', 'G1 X10 Y10 E1 F1200', 'M104 S0', 'M140 S0'];
+var lift = C.verify(head.concat(['G1 Z3 F3000', 'G28'], tail).join('\n'), base.settings);
+if (lift.findings.some(function (f) { return f.code === 'move.unhomed'; })) {
+  fail++; console.log('  FALSE ALARM: a Z lift before homing read as an unhomed move');
+} else { pass++; console.log('  ok      lifting Z before homing is allowed'); }
+
+expectCatch('an X/Y move before homing',
+  head.concat(['G1 X100 Y100 F3000', 'G28'], tail).join('\n'),
+  base.settings, 'move.unhomed', 'error');
+expectCatch('a downward Z move before homing',
+  head.concat(['G1 Z-2 F3000', 'G28'], tail).join('\n'),
+  base.settings, 'move.unhomed', 'error');
+
 console.log('\n'+pass+' passed, '+fail+' failed');
 process.exit(fail?1:0);
