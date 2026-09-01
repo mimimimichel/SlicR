@@ -1,9 +1,9 @@
-globalThis.ClipperLib = require('./js/vendor/clipper.js');
-globalThis.OrcaPresets = require('./js/slicer/presets.js');
-require('./js/slicer/engine.js');
-require('./js/slicer/beading.js');
-require('./js/slicer/lightning.js');
-require('./js/slicer/gcodecheck.js');
+globalThis.ClipperLib = require('/home/user/ODPS-Studio/js/vendor/clipper.js');
+globalThis.OrcaPresets = require('/home/user/ODPS-Studio/js/slicer/presets.js');
+require('/home/user/ODPS-Studio/js/slicer/engine.js');
+require('/home/user/ODPS-Studio/js/slicer/beading.js');
+require('/home/user/ODPS-Studio/js/slicer/lightning.js');
+require('/home/user/ODPS-Studio/js/slicer/gcodecheck.js');
 var E = globalThis.OrcaEngine, P = globalThis.OrcaPresets;
 
 function box(w, d, h, cx, cy) {
@@ -280,6 +280,60 @@ chkTrue('fuzzed beads keep their own width',
   if (bad.length) { fails++; console.log('FAIL  '+c[0]+' verifier: '+JSON.stringify(bad.slice(0,3))); }
   else console.log('  ok  '+c[0]+': verifier clean');
 });
+
+// --- 5. a faceted curve is not a thin feature ---
+// A round wall arrives as a polygon, and the flats between its vertices leave
+// notches a few hundredths of a millimetre deep all the way round. Counted by
+// area those add up to square millimetres of "thin material" that is nothing
+// of the kind, and every layer of every curved part then pays for a thickness
+// field it has no use for. Depth is what tells a notch from a rib.
+function cylinder(r, h, cx, cy, n) {
+  var t = [];
+  function q(a,b,c,e){ t.push(a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2],
+                              a[0],a[1],a[2],c[0],c[1],c[2],e[0],e[1],e[2]); }
+  for (var i = 0; i < n; i++) {
+    var a0 = i/n*2*Math.PI, a1 = (i+1)/n*2*Math.PI;
+    var p0 = [cx+r*Math.cos(a0), cy+r*Math.sin(a0)];
+    var p1 = [cx+r*Math.cos(a1), cy+r*Math.sin(a1)];
+    q([p0[0],p0[1],0],[p1[0],p1[1],0],[p1[0],p1[1],h],[p0[0],p0[1],h]);
+    t.push(cx,cy,0, p1[0],p1[1],0, p0[0],p0[1],0);
+    t.push(cx,cy,h, p0[0],p0[1],h, p1[0],p1[1],h);
+  }
+  return new Float32Array(t);
+}
+function merge(list) {
+  var n = 0, i;
+  for (i = 0; i < list.length; i++) n += list[i].length;
+  var out = new Float32Array(n), at = 0;
+  for (i = 0; i < list.length; i++) { out.set(list[i], at); at += list[i].length; }
+  return out;
+}
+var B = globalThis.OrcaBeading;
+var fieldCalls = 0;
+var realField = B.thicknessField;
+B.thicknessField = function () { fieldCalls++; return realField.apply(this, arguments); };
+
+var plainCyl = cylinder(20, 6, 150, 150, 96);
+E.slice({ positions: plainCyl, settings: settings({}) }, function () {});
+chkTrue('a round wall costs no thickness field at all (' + fieldCalls + ' calls)',
+        fieldCalls === 0, fieldCalls + ' calls on a plain cylinder');
+
+// But a real thin feature on that same round part still gets one, and still
+// gets beads: the screen has to be cheap, not blind.
+fieldCalls = 0;
+var finned = merge([plainCyl, box(24, 0.7, 6, 150 + 22, 150)]);
+var finSliced = E.slice({ positions: finned, settings: settings({}) }, function () {});
+chkTrue('a 0.7 mm fin on the same part is still found (' + fieldCalls + ' calls)',
+        fieldCalls > 0, 'no thickness field computed for a fin thinner than two walls');
+B.thicknessField = realField;
+
+// And the fin is printed as a single bead down its middle, not two starved
+// walls: one pass, and wider than the nominal line.
+var finLayer = layerScan(finSliced.gcode, 2.0, 2.4, settings({}));
+chkTrue('and the fin comes out as material, not as a gap (' + finLayer.area.toFixed(1) + ' mm²)',
+        finLayer.area > 0, 'nothing laid on that layer');
+var finBad = finSliced.report.findings.filter(function (f) { return f.severity !== 'info'; });
+chkTrue('fin: verifier clean', finBad.length === 0, finBad.length ? JSON.stringify(finBad[0]) : '');
 
 console.log(fails ? '\n'+fails+' FAILURES' : '\nall arachne checks pass');
 process.exit(fails?1:0);

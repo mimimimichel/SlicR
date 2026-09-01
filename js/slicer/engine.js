@@ -303,7 +303,7 @@
       (starts[k] || (starts[k] = [])).push(i);
     }
 
-    var paths = [];
+    var paths = [], opens = [];
     for (var s = 0; s < segs.length; s++) {
       if (used[s]) continue;
       used[s] = 1;
@@ -325,16 +325,88 @@
         poly.push([cx, cy]);
       }
 
-      // Force-close small gaps left by non-manifold meshes; drop hopeless chains.
+      // Force-close small gaps left by non-manifold meshes. Anything wider is
+      // set aside rather than dropped: a mesh missing a whole facet leaves a
+      // gap the width of that facet, and throwing the contour away turns a
+      // repairable file into an empty plate.
       var gap = Math.hypot(poly[0][0] - cx, poly[0][1] - cy);
-      if (gap > 0.5) continue;
+      // A single segment is a legitimate piece of a broken outline — the walk
+      // stops wherever the mesh does — so it is set aside to be joined, not
+      // thrown away for being short. Only a closed contour has to be a shape.
+      if (gap > 0.5) { opens.push(poly); continue; }
       if (poly.length < 3) continue;
 
       var path = new Array(poly.length);
       for (var p = 0; p < poly.length; p++) path[p] = { X: mm(poly[p][0]), Y: mm(poly[p][1]) };
       paths.push(path);
     }
+
+    var repaired = closeOpenChains(opens);
+    for (var r = 0; r < repaired.length; r++) paths.push(repaired[r]);
     return simplify(paths);
+  }
+
+  /**
+   * Make closed contours out of the chains that would not close on their own.
+   *
+   * A hole in the mesh is a hole in the outline: the walk runs off the end of
+   * the geometry and stops. Two things save it. First the loose ends are joined
+   * to each other, nearest pair first — a facet missing from the middle of a
+   * wall usually leaves two chains that belong together. Then what is still
+   * open is closed across its own gap, but only when the gap is small beside
+   * the contour it would close: a chain 60 mm long with 20 mm missing is a
+   * square with a wall out of it and comes out right; a 2 mm scrap with a 40 mm
+   * gap is a fragment of something else and is dropped.
+   *
+   * A sound mesh never reaches here, so this costs nothing on one.
+   */
+  function closeOpenChains(opens) {
+    if (!opens.length) return [];
+
+    function ends(c) { return [c[0], c[c.length - 1]]; }
+    function d2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+
+    // Greedy join: the closest two loose ends in the whole layer, over and over,
+    // until there is nothing left to pair. The bound is the number of joins
+    // possible, which is one fewer than the chains we started with.
+    var joinsLeft = opens.length - 1;
+    while (joinsLeft-- > 0 && opens.length > 1) {
+      var best = null;
+      for (var i = 0; i < opens.length; i++) {
+        for (var j = i + 1; j < opens.length; j++) {
+          var ei = ends(opens[i]), ej = ends(opens[j]);
+          for (var a = 0; a < 2; a++) {
+            for (var b = 0; b < 2; b++) {
+              var dist = d2(ei[a], ej[b]);
+              if (!best || dist < best.d) best = { d: dist, i: i, j: j, a: a, b: b };
+            }
+          }
+        }
+      }
+      if (!best) break;
+      var A = opens[best.i], B = opens[best.j];
+      if (best.a === 0) A.reverse();            // join at A's tail
+      if (best.b === 1) B.reverse();            // to B's head
+      opens[best.i] = A.concat(B);
+      opens.splice(best.j, 1);
+    }
+
+    var out = [];
+    for (var k = 0; k < opens.length; k++) {
+      var poly = opens[k];
+      if (poly.length < 3) continue;
+      var span = Math.hypot(poly[0][0] - poly[poly.length - 1][0],
+                            poly[0][1] - poly[poly.length - 1][1]);
+      var run = 0;
+      for (var q = 1; q < poly.length; q++) {
+        run += Math.hypot(poly[q][0] - poly[q - 1][0], poly[q][1] - poly[q - 1][1]);
+      }
+      if (span > run * 0.5) continue;           // more hole than contour
+      var path = new Array(poly.length);
+      for (var m = 0; m < poly.length; m++) path[m] = { X: mm(poly[m][0]), Y: mm(poly[m][1]) };
+      out.push(path);
+    }
+    return out;
   }
 
   root.OrcaEngineGeom = {
@@ -761,9 +833,26 @@
    * Uniform layers, or adaptive ones when asked: shallow surfaces get thin
    * layers to hide the stepping, vertical walls get thick ones to save time.
    */
+  /**
+   * Beyond this a file is not a model. The tallest machine here prints 410 mm,
+   * which is 10 250 layers at the finest height on offer; anything an order
+   * past that is a mesh drawn in metres, or one stray vertex in a corrupt
+   * file. Left to run, the layer loop allocates one object per 0.06 mm of it
+   * until the tab dies with no message — so it is refused here, in a sentence.
+   */
+  var MAX_LAYERS = 20000;
+
   function planLayers(minZ, maxZ, s, positions) {
     var height = maxZ - minZ;
     if (height <= 0) return [];
+
+    var minPossible = Math.max(0.04, s.layerHeight * 0.4);
+    if (height / minPossible > MAX_LAYERS) {
+      throw new Error('This model is ' + Math.round(height) + ' mm tall, which is ' +
+        Math.round(height / s.layerHeight).toLocaleString() + ' layers — more than anything ' +
+        'here can print. Check the units: a mesh drawn in metres or inches comes out that ' +
+        'much too big, and one stray vertex in a broken file does the same.');
+    }
 
     var layers = [];
     var h1 = Math.min(s.firstLayerHeight, height);
@@ -1250,7 +1339,19 @@
           var screenDepth = wallStack(s.wallLoops, wl, layerPlan[Li].height) + wl.inner * 0.5;
           var miter = G.ClipperLib.JoinType.jtMiter;
           var screened = G.offsetPaths(G.offsetPaths(iPaths, -screenDepth, miter), screenDepth, miter);
-          hasThinFeatures = G.totalArea(G.subtract(iPaths, screened)) > Math.pow(wl.inner * 0.5, 2);
+          var lost = G.subtract(iPaths, screened);
+          // What the opening removes is not all thin material. A curved wall
+          // arrives as a polygon, and the flats between its vertices leave
+          // notches a few hundredths of a millimetre deep all the way round —
+          // on a 55 mm disc that is square millimetres of "thin feature" that
+          // is nothing of the kind. Depth tells them apart: a notch shallower
+          // than this disappears when the lost region is eroded, and a rib
+          // does not. Without it every faceted curve pays for a thickness
+          // field on every layer, and half the time slicing a sphere went
+          // into deciding that its walls were exactly as thick as they looked.
+          if (G.totalArea(lost) > Math.pow(wl.inner * 0.5, 2)) {
+            hasThinFeatures = G.offsetPaths(lost, -Math.max(0.05, wl.inner * 0.12)).length > 0;
+          }
         }
 
         // Anything too narrow to hold a full outer wall is pulled out and beaded
@@ -1837,9 +1938,30 @@
     return { items: items, findings: findings, radius: radius, lift: lift };
   }
 
+  /**
+   * A coordinate that is not a number poisons everything downstream: bounds
+   * become NaN, every comparison against them is false, and the failure
+   * surfaces as an empty plate three stages later. Caught here it is one
+   * sentence about the file.
+   */
+  function checkPositions(positions) {
+    var n = positions ? positions.length : 0;
+    for (var i = 0; i < n; i++) {
+      if (!isFinite(positions[i])) {
+        throw new Error('This model has a corner that is not a number, so nothing about ' +
+          'it can be measured. The file is damaged — reopening it from the original, or ' +
+          'running it through a mesh repair, is the only fix.');
+      }
+    }
+  }
+
   function slice(job, onProgress) {
     var s = job.settings;
     var progress = onProgress || function () {};
+    checkPositions(job.positions);
+    if (job.objects) {
+      for (var ci = 0; ci < job.objects.length; ci++) checkPositions(job.objects[ci].positions);
+    }
 
     if (s.spiralVase) {
       s.wallLoops = 1; s.infillDensity = 0; s.topLayers = 0;
