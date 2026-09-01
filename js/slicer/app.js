@@ -197,6 +197,8 @@
         hint: 'Faster, at the price of stringing — off is what every reference slicer does' },
       { key: 'wipeOnRetract', label: 'Wipe on retract', type: 'bool' },
       { key: 'wipeDistance', label: 'Wipe distance', unit: 'mm', min: 0, max: 5, step: 0.5 },
+      { key: 'gcodeResolution', label: 'G-code resolution', unit: 'mm', min: 0, max: 0.1, step: 0.0025,
+        hint: 'Points closer than this share a command — too many tiny moves make a printer hesitate' },
       { key: 'spiralVase', label: 'Spiral vase mode', hint: 'Single wall, no top, continuous Z', type: 'bool' }
     ]}
   ];

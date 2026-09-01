@@ -1,5 +1,9 @@
 /**
- * Web Slicer — travelling without dribbling.
+ * Web Slicer — what the file asks the head to do between extrusions.
+ *
+ * Two failures with one measurement behind them: stringing, which is travel
+ * made with the pressure still on, and the hesitation mid-layer that comes of
+ * asking a board to read more commands than it can act on.
  *
  * Stringing is not a mystery of the machine. A nozzle full of molten plastic
  * that moves without first pulling the filament back leaves some of it behind,
@@ -139,7 +143,70 @@ ok('the X1, which has no published value, is left alone', !/M900/.test(x1));
 ok('the Kobra 3 gets its own', /^M900 K0\.051\b/m.test(P.PRINTERS.anycubic_kobra3.startGcode),
   (P.PRINTERS.anycubic_kobra3.startGcode.match(/M900.*/) || ['none'])[0]);
 
-console.log('\n=== 4. against the reference ===');
+console.log('\n=== 4. commands the machine cannot act on ===');
+// A curved wall used to come out of the offsetting with duplicate vertices a
+// micron apart — hundreds of them, each one a command the board must read,
+// plan and step through. A run of moves shorter than the time it takes to read
+// them empties the look-ahead, and the head hesitates in the middle of a layer.
+function segments(gcode) {
+  var lines = gcode.split('\n');
+  var x=0, y=0, f=3000, body=false, lens=[], times=[];
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i];
+    if (!body && /^;\s*(TYPE|LAYER_CHANGE|LAYER:)/i.test(raw)) body = true;
+    if (body && /^;END_GCODE|^M(104|140)\s+S0\b/i.test(raw.trim())) break;
+    var L = raw.split(';')[0].trim();
+    if (!L || !/^G[01]\b/.test(L)) continue;
+    var nx=x, ny=y;
+    var mx=/X(-?[\d.]+)/.exec(L); if (mx) nx = parseFloat(mx[1]);
+    var my=/Y(-?[\d.]+)/.exec(L); if (my) ny = parseFloat(my[1]);
+    var mf=/F([\d.]+)/.exec(L); if (mf) f = parseFloat(mf[1]);
+    var d = Math.hypot(nx - x, ny - y);
+    if (d > 1e-12) { lens.push(d); times.push(d / (f / 60)); }
+    x = nx; y = ny;
+  }
+  // The most commands the board is asked to read in any one second of printing.
+  var worst = 0, from = 0, acc = 0;
+  for (var k = 0; k < times.length; k++) {
+    acc += times[k];
+    while (acc > 1 && from < k) acc -= times[from++];
+    if (k - from + 1 > worst) worst = k - from + 1;
+  }
+  return { lens: lens, worst: worst,
+           tiny: lens.filter(function (d) { return d < 0.0125; }).length };
+}
+// A round wall, because curves are where the duplicates came from.
+function cylTris(r, h, cx, cy, n) {
+  var t = [];
+  function q(a,b,c,e){ t.push(a,b,c,a,c,e); }
+  for (var i = 0; i < n; i++) {
+    var a0 = i/n*2*Math.PI, a1 = (i+1)/n*2*Math.PI;
+    var p0 = [cx + r*Math.cos(a0), cy + r*Math.sin(a0)];
+    var p1 = [cx + r*Math.cos(a1), cy + r*Math.sin(a1)];
+    q([p0[0],p0[1],0],[p1[0],p1[1],0],[p1[0],p1[1],h],[p0[0],p0[1],h]);
+    t.push([cx,cy,0],[p1[0],p1[1],0],[p0[0],p0[1],0]);
+    t.push([cx,cy,h],[p0[0],p0[1],h],[p1[0],p1[1],h]);
+  }
+  return t;
+}
+var CYL = cylTris(12, 15, 150, 150, 128);
+function slice(tris, over) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'standard_02');
+  s.skirtLoops = 0; s.brimWidth = 0;
+  for (var k in over) s[k] = over[k];
+  return E.slice({ positions: flat(tris), settings: s }, function () {}).gcode;
+}
+var round = segments(slice(CYL, {}));
+console.log('  ' + round.lens.length + ' moves, busiest second ' + round.worst);
+ok('a curved wall carries no move the machine cannot make (' + round.tiny + ')',
+  round.tiny === 0, String(round.tiny));
+ok('and the busiest second stays within what a board reads (' + round.worst + ')',
+  round.worst < 400, String(round.worst));
+var raw = segments(slice(CYL, { gcodeResolution: 0 }));
+ok('which is the thinning doing it, not the shape (' + raw.tiny + ' without it)',
+  raw.tiny > 100, String(raw.tiny));
+
+console.log('\n=== 5. against the reference ===');
 var REF = (function () {
   try { return cp.execSync('command -v prusa-slicer', { encoding: 'utf8' }).trim(); }
   catch (e) { return null; }

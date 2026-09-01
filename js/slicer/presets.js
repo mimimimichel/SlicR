@@ -1081,6 +1081,12 @@
       raftLayers: 2,
       raftGap: 0.2,
 
+      // How close two points have to be before the second is not worth a
+      // command of its own. The value every reference slicer ships; below it
+      // the machine cannot act on the difference, and the commands cost the
+      // firmware more than the accuracy is worth.
+      gcodeResolution: 0.0125,
+
       // --- Travel ---
       // Skipping the retraction when the travel keeps the nozzle over plastic
       // saves time, and every reference slicer ships it off: over sparse infill

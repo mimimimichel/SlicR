@@ -3270,6 +3270,7 @@
     var arcCount = 0;
     var combPaths = null;
     var currentFan = -1;
+    var droppedPoints = 0;
 
     function fmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
     function fmtE(v) { return (Math.round(v * 10000) / 10000).toString(); }
@@ -3350,6 +3351,38 @@
       cx = x; cy = y;
       lastF = -1;
       unretract();
+    }
+
+    /**
+     * Drop points closer together than the machine can act on.
+     *
+     * Offsetting and clipping leave duplicate vertices behind: on a curved wall
+     * ours came out a micron apart, hundreds of them per part. Each is still a
+     * command the board must read, plan and step through, and a run of moves
+     * shorter than the time it takes to read them empties the look-ahead — the
+     * head runs out of planned motion and hesitates, in the middle of a layer,
+     * for no reason visible in the file.
+     *
+     * The reference slicers all do this, under the name G-code resolution, and
+     * 0.0125 mm is the value they ship. This is the conservative form of it: a
+     * point is kept unless it is within the tolerance of the one before it, so
+     * the path never moves further from where it was drawn than that, and the
+     * ends of a run are always kept. Widths travel with their points.
+     */
+    function collapse(pts, widths, tol) {
+      if (!pts || pts.length < 3 || !(tol > 0)) return null;
+      var limit = tol * SCALE, keep = [pts[0]], kw = widths ? [widths[0]] : null;
+      for (var i = 1; i < pts.length - 1; i++) {
+        var last = keep[keep.length - 1];
+        if (Math.hypot(pts[i].X - last.X, pts[i].Y - last.Y) < limit) { droppedPoints++; continue; }
+        keep.push(pts[i]);
+        if (kw) kw.push(widths[i]);
+      }
+      keep.push(pts[pts.length - 1]);
+      if (kw) kw.push(widths[pts.length - 1]);
+      // A loop collapsed to a couple of points is not a loop any more.
+      if (keep.length < 3 && pts.length >= 3) return null;
+      return { pts: keep, widths: kw };
     }
 
     function extrudeTo(x, y, z, w, h, speed, flow) {
@@ -3638,6 +3671,9 @@
       for (var fi = 0; fi < layer.feats.length; fi++) {
         var f = layer.feats[fi];
         var pts = f.pts;
+        var fWidths = f.widths;
+        var thinned = collapse(pts, fWidths, s.gcodeResolution);
+        if (thinned) { pts = thinned.pts; fWidths = thinned.widths; }
         if (pts.length < 2) continue;
 
         // Changing tool: pull the filament back first, then hand over. The
@@ -3681,7 +3717,7 @@
         // A scarfed loop varies its flow along the path, so it cannot be an arc
         // and it is not a plain constant-flow run either.
         if (s.seamScarf && f.type === FEATURE.OUTER && f.closed && !vase && Lo > 0) {
-          var scarf = scarfLoop(pts, s.scarfLength, f.widths);
+          var scarf = scarfLoop(pts, s.scarfLength, fWidths);
           if (scarf) {
             for (var si = 1; si < scarf.pts.length; si++) {
               var sw = scarf.widths ? (scarf.widths[si - 1] + scarf.widths[si]) / 2 : width;
@@ -3695,7 +3731,7 @@
         // Arcs need a constant width and a flat layer, so variable-width beads
         // and the vase spiral keep their straight segments.
         if (s.arcFitting && flavor.supportsArcs && s.machineArcs !== false &&
-            !f.widths && !vase && pts.length >= 6) {
+            !fWidths && !vase && pts.length >= 6) {
           var fitted = fitArcs(pts, s.arcTolerance);
           for (var mi = 0; mi < fitted.length; mi++) {
             var mv = fitted[mi];
@@ -3717,7 +3753,7 @@
             zTarget = zPrev + (layer.z - zPrev) * (run / totalLen);
           }
           // A variable-width bead extrudes the average width of each segment.
-          var segWidth = f.widths ? (f.widths[pi - 1] + f.widths[pi]) / 2 : width;
+          var segWidth = fWidths ? (fWidths[pi - 1] + fWidths[pi]) / 2 : width;
           extrudeTo(X, Y, zTarget, segWidth, layer.h, speed, flow);
         }
       }
@@ -3757,6 +3793,8 @@
         layers: layers.length,
         moves: moves.L.length,
         arcs: arcCount,
+        // Points too close together to be worth a command of their own.
+        droppedPoints: droppedPoints,
         features: featureCounts,
         slowedLayers: Array.prototype.filter.call(scales, function (x) { return x < 1; }).length
       }
