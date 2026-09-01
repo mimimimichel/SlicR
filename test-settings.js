@@ -163,5 +163,57 @@ ok('no adhesion at all takes the skirt away',
 ok('vase mode leaves one wall and no top',
   filament(outputs['spiralVase']) < baseFil * 0.5);
 
+console.log('\n=== 3. and the seam goes where it says ===');
+// A seam is the one blemish on a round wall, and the whole point of choosing
+// where it goes is that it goes there. Measured on a cylinder: the angle each
+// outer loop starts at, and how much those angles move from layer to layer.
+function cylinder(r, h, cx, cy, n) {
+  var t = [];
+  for (var i = 0; i < n; i++) {
+    var a0 = i / n * 2 * Math.PI, a1 = (i + 1) / n * 2 * Math.PI;
+    var p0 = [cx + r * Math.cos(a0), cy + r * Math.sin(a0)];
+    var p1 = [cx + r * Math.cos(a1), cy + r * Math.sin(a1)];
+    q(t, [p0[0], p0[1], 0], [p1[0], p1[1], 0], [p1[0], p1[1], h], [p0[0], p0[1], h]);
+    t.push([cx, cy, 0], [p1[0], p1[1], 0], [p0[0], p0[1], 0]);
+    t.push([cx, cy, h], [p0[0], p0[1], h], [p1[0], p1[1], h]);
+  }
+  return t;
+}
+var ROUND = flat(cylinder(10, 6, 150, 150, 64));
+function seams(mode) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'q020');
+  s.skirtLoops = 0; s.brimWidth = 0; s.seamScarf = false; s.seamPosition = mode;
+  var g = E.slice({ positions: ROUND, settings: s }, function () {}).gcode;
+  var x = 0, y = 0, z = 0, e = 0, armed = false, angles = [];
+  g.split('\n').forEach(function (raw) {
+    var mz = /^;Z:([\d.]+)/.exec(raw); if (mz) z = parseFloat(mz[1]);
+    var t = /^;\s*TYPE:(.*)$/i.exec(raw);
+    if (t) armed = /external perimeter/i.test(t[1]);
+    var L = raw.split(';')[0].trim();
+    if (!/^G[01]\b/.test(L)) return;
+    var nx = x, ny = y;
+    var mx = /X(-?[\d.]+)/.exec(L); if (mx) nx = parseFloat(mx[1]);
+    var my = /Y(-?[\d.]+)/.exec(L); if (my) ny = parseFloat(my[1]);
+    var me = /E(-?[\d.]+)/.exec(L);
+    var de = me ? parseFloat(me[1]) - e : 0;
+    if (me) e = parseFloat(me[1]);
+    if (armed && de > 0 && z > 1) { angles.push(Math.atan2(y - 150, x - 150) * 180 / Math.PI); armed = false; }
+    x = nx; y = ny;
+  });
+  var mean = angles.reduce(function (a, b) { return a + b; }, 0) / (angles.length || 1);
+  var spread = Math.sqrt(angles.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) /
+    (angles.length || 1));
+  return { n: angles.length, mean: mean, spread: spread };
+}
+var rear = seams('rear'), aligned = seams('aligned'), random = seams('random');
+ok('rear puts the seam at the back and keeps it there (' + rear.mean.toFixed(0) + '° ± ' +
+   rear.spread.toFixed(0) + ')', Math.abs(rear.mean - 90) < 15 && rear.spread < 10,
+  rear.mean.toFixed(0) + '° ± ' + rear.spread.toFixed(0));
+ok('aligned stacks it too, somewhere else (' + aligned.mean.toFixed(0) + '° ± ' +
+   aligned.spread.toFixed(0) + ')', aligned.spread < 10 && Math.abs(aligned.mean - 90) > 30,
+  aligned.mean.toFixed(0) + '° ± ' + aligned.spread.toFixed(0));
+ok('and random really does scatter it (± ' + random.spread.toFixed(0) + '°)',
+  random.spread > 40, String(random.spread));
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

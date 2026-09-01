@@ -1373,7 +1373,13 @@
         var island = islands[isl];
         var iPaths = G.islandPaths(island);
         var bb = G.pathsBBox([island.outer]);
-        var seamRef = s.seamPosition === 'nearest' ? lastPoint : { X: bb.minX, Y: bb.minY };
+        // Where the loop is asked to start. Nearest keeps the travel short and
+        // scatters the seam; aligned stacks it at one corner; rear puts it at
+        // the back of the part, which is the one place nobody looks.
+        var seamRef;
+        if (s.seamPosition === 'nearest') seamRef = lastPoint;
+        else if (s.seamPosition === 'rear') seamRef = { X: (bb.minX + bb.maxX) / 2, Y: bb.maxY };
+        else seamRef = { X: bb.minX, Y: bb.minY };
         var seamMark = paintedSeam(s.paintMarks, layerPlan[Li].sliceZ, bb);
         if (seamMark) seamRef = seamMark;
 
