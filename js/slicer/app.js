@@ -981,9 +981,14 @@
     if (!btn) return;
     btn.hidden = !linkReady();
     btn.disabled = !linkReady() || !state.result || state.sending || state.slicing;
-    btn.title = (state.link.autoStart && linkCanStart())
+    var starts = state.link.autoStart && linkCanStart();
+    btn.title = starts
       ? 'Send to ' + linkName(state.link.kind) + ' and start printing'
       : 'Send to ' + linkName(state.link.kind);
+    // Upload, or upload and print: the difference matters enough to be on the
+    // button rather than in a tooltip.
+    var label = btn.querySelector('.full');
+    if (label) label.textContent = starts ? 'Print' : 'Send';
   }
 
   /**
@@ -1824,7 +1829,7 @@
     var presets = state.presetsEl;
     if (presetsBelong() === 'topbar') {
       presets.classList.remove('in-panel');
-      if (presets.parentElement !== el('topbar')) el('topbar').insertBefore(presets, el('btn-panel'));
+      if (presets.parentElement !== el('topbar')) el('topbar').insertBefore(presets, el('topbar-actions'));
     } else {
       presets.classList.add('in-panel');
       if (state.tab === 'print' && el('panel').classList.contains('open')) renderPanel();
@@ -2346,6 +2351,31 @@
   function refreshEmpty() {
     el('empty').style.display = state.viewer.models.length ? 'none' : 'grid';
     el('btn-slice').disabled = !state.viewer.models.length || state.slicing;
+    refreshTools();
+  }
+
+  /**
+   * A tool that cannot do anything yet says so. Move, lay flat and paint need
+   * a model on the plate; delete needs one picked. Greying them out is the
+   * difference between "I pressed it and nothing happened" and "not yet".
+   */
+  function refreshTools() {
+    var any = state.viewer.models.length > 0;
+    el('tool-move').disabled = !any;
+    el('tool-face').disabled = !any;
+    el('tool-paint').disabled = !any;
+    el('tool-arrange').disabled = !any;
+    el('tool-delete').disabled = !state.viewer.selected;
+    // Clearing the plate would otherwise leave the pointer in a mode with
+    // nothing to work on, and its button greyed out mid-use.
+    if (!any && state.viewer.mode !== 'orbit') setTool('orbit');
+  }
+
+  /** Which way the camera is pointing, shown on the button that put it there. */
+  function markView(view) {
+    document.querySelectorAll('[data-view]').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.view === view);
+    });
   }
 
   function openPanel(tab) {
@@ -2383,7 +2413,7 @@
     loadLink();
 
     state.viewer = new window.OrcaViewer(el('sl-canvas'), {
-      onSelect: function () { if (state.tab === 'object') renderPanel(); },
+      onSelect: function () { refreshTools(); if (state.tab === 'object') renderPanel(); },
       onMove: function () { updateBoundsWarning(); invalidate(); }
     });
     applyBed();
@@ -2438,10 +2468,17 @@
     el('tool-delete').onclick = function () {
       if (state.viewer.selected) { state.viewer.removeModel(state.viewer.selected); invalidate(); refreshEmpty(); renderPanel(); }
     };
+    refreshTools();
     el('tool-preview').onclick = function () { setPreview(!state.previewOn); };
 
     document.querySelectorAll('[data-view]').forEach(function (b) {
-      b.onclick = function () { state.viewer.setView(b.dataset.view); };
+      b.onclick = function () { state.viewer.setView(b.dataset.view); markView(b.dataset.view); };
+    });
+    markView('iso');
+    // The highlight claims the camera is square-on. The first drag makes that
+    // untrue, so it goes out rather than lie.
+    el('sl-canvas').addEventListener('pointermove', function (ev) {
+      if (ev.buttons) markView(null);
     });
 
     el('layer-range').oninput = updateLayerLabel;

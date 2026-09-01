@@ -26,35 +26,54 @@
       </span>
     </span>
 
-    <button class="sl-btn" id="btn-open" type="button">📂 <span class="full">Open</span></button>
+    <button class="sl-btn" id="btn-open" type="button" title="Open a model — STL, 3MF or OBJ">📂 <span class="full">Open</span></button>
     <input type="file" id="file-input" accept=".stl,.3mf,.obj,model/stl,model/3mf" multiple hidden/>
     <input type="file" id="profile-input" accept=".json,application/json" hidden/>
 
     <div class="sl-spacer"></div>
 
+    <!-- What is being printed, and with what. Each picker says what it is:
+         three unlabelled dropdowns only make sense to whoever wrote them. -->
     <div class="sl-presets" id="presets">
-      <select class="sl-select" id="sel-printer" aria-label="Printer"></select>
-      <select class="sl-select" id="sel-filament" aria-label="Filament"></select>
-      <select class="sl-select" id="sel-quality" aria-label="Quality"></select>
+      <label class="sl-preset"><small>Printer</small>
+        <select class="sl-select" id="sel-printer" aria-label="Printer"></select>
+      </label>
+      <label class="sl-preset"><small>Filament</small>
+        <select class="sl-select" id="sel-filament" aria-label="Filament"></select>
+      </label>
+      <label class="sl-preset"><small>Quality</small>
+        <select class="sl-select" id="sel-quality" aria-label="Quality"></select>
+      </label>
     </div>
 
-    <button class="sl-btn icon" id="btn-panel" type="button" aria-label="Settings" title="Settings">⚙️</button>
-    <button class="sl-btn primary" id="btn-slice" type="button" disabled>Slice</button>
-    <button class="sl-btn" id="btn-export" type="button" disabled title="Download G-code">⬇︎ <span class="full">G-code</span></button>
-    <button class="sl-btn" id="btn-send" type="button" disabled hidden title="Send to OctoPrint">📡 <span class="full">OctoPrint</span></button>
+    <!-- Settle the settings, slice, then take the result somewhere: the order
+         the job happens in, kept together and away from the pickers. -->
+    <div class="sl-actions" id="topbar-actions">
+      <button class="sl-btn icon" id="btn-panel" type="button" aria-label="Settings" title="All settings">⚙️</button>
+      <button class="sl-btn primary" id="btn-slice" type="button" disabled>Slice</button>
+      <button class="sl-btn" id="btn-export" type="button" disabled title="Download the G-code file">⬇︎ <span class="full">G-code</span></button>
+      <button class="sl-btn" id="btn-send" type="button" disabled hidden title="Send to the printer">📡 <span class="full">Send</span></button>
+    </div>
   </header>
 
   <div class="sl-stage" id="stage">
     <canvas id="sl-canvas"></canvas>
 
-    <div class="sl-tools">
-      <button class="sl-btn icon on" id="tool-orbit" type="button" title="Orbit / select">🔄</button>
-      <button class="sl-btn icon" id="tool-move" type="button" title="Drag models on the plate">✋</button>
-      <button class="sl-btn icon" id="tool-face" type="button" title="Tap a face to lay it flat">⬓</button>
-      <button class="sl-btn icon" id="tool-paint" type="button" title="Paint supports and seams">🖌</button>
-      <button class="sl-btn icon" id="tool-arrange" type="button" title="Auto-arrange">⊞</button>
-      <button class="sl-btn icon" id="tool-delete" type="button" title="Delete selected">🗑</button>
-      <button class="sl-btn icon" id="tool-preview" type="button" title="Toggle model / preview" disabled>👁</button>
+    <div class="sl-tools" id="tools">
+      <!-- What a touch does to the model. One of these is always in force, so
+           they are drawn as one block of choices. -->
+      <div class="sl-toolgroup" role="group" aria-label="What tapping does">
+        <button class="sl-btn tool on" id="tool-orbit" type="button" title="Turn the view and pick models"><i>🔄</i><b>Select</b></button>
+        <button class="sl-btn tool" id="tool-move" type="button" title="Drag models around the plate"><i>✋</i><b>Move</b></button>
+        <button class="sl-btn tool" id="tool-face" type="button" title="Tap a face to lay it flat on the plate"><i>⬓</i><b>Lay flat</b></button>
+        <button class="sl-btn tool" id="tool-paint" type="button" title="Paint supports and seams on the model"><i>🖌</i><b>Paint</b></button>
+      </div>
+      <!-- And what happens the moment you press it, which is a different kind
+           of thing and sits apart. -->
+      <div class="sl-toolgroup" role="group" aria-label="The plate">
+        <button class="sl-btn tool" id="tool-arrange" type="button" title="Lay every model out on the plate"><i>⊞</i><b>Arrange</b></button>
+        <button class="sl-btn tool" id="tool-delete" type="button" title="Delete the selected model"><i>🗑</i><b>Delete</b></button>
+      </div>
     </div>
 
     <div class="sl-paint" id="paint-palette" hidden>
@@ -79,18 +98,14 @@
       <p class="sl-paint-hint">Tap the model to paint, tap a mark to remove it.</p>
     </div>
 
-    <div class="sl-views">
-      <button class="sl-btn" data-view="iso" type="button">Iso</button>
-      <button class="sl-btn" data-view="top" type="button">Top</button>
-      <button class="sl-btn" data-view="front" type="button">Front</button>
-      <button class="sl-btn" data-view="left" type="button">Left</button>
-    </div>
-
     <div class="sl-empty" id="empty">
       <h2>Drop a model to start</h2>
       <p>STL, 3MF or OBJ — everything is sliced locally in your browser. Nothing is uploaded.</p>
       <div class="sl-empty-actions">
         <button class="sl-btn primary" id="btn-open2" type="button">Choose a file</button>
+      </div>
+      <div class="sl-empty-demos">
+        <span>or try one of these</span>
         <button class="sl-btn" data-demo="cube" type="button">20 mm cube</button>
         <button class="sl-btn" data-demo="cylinder" type="button">Tube</button>
         <button class="sl-btn" data-demo="pyramid" type="button">Pyramid</button>
@@ -107,13 +122,30 @@
     <div class="sl-layers" id="layers">
       <div class="sl-layer-num"><b id="layer-num">0</b><span id="layer-z">0.00 mm</span></div>
       <div class="sl-range-wrap"><input type="range" class="sl-vrange" id="layer-range" min="0" max="0" value="0" aria-label="Layer"/></div>
-      <button class="sl-btn icon" id="btn-single" type="button" title="Show only this layer">≡</button>
-      <button class="sl-btn icon" id="btn-travels" type="button" title="Show travel moves">↔</button>
+      <button class="sl-btn tool" id="btn-single" type="button" title="Show only this layer, not everything below it"><i>≡</i><b>One</b></button>
+      <button class="sl-btn tool" id="btn-travels" type="button" title="Show the moves made with the nozzle off"><i>↔</i><b>Travel</b></button>
     </div>
 
-    <div class="sl-legend" id="legend"></div>
-    <div class="sl-stats" id="stats"></div>
-    <button class="sl-check-status" id="check-status" type="button"></button>
+    <!-- The bottom of the screen, laid out as one row rather than four
+         islands that each guessed where the others were. Left: what you are
+         looking at. Middle: what came out of the slice. Right: what the
+         colours mean. -->
+    <div class="sl-dock" id="dock">
+      <div class="sl-views">
+        <button class="sl-btn" id="tool-preview" type="button" disabled title="Switch between the model and the sliced result">👁 <span class="full">Preview</span></button>
+        <div class="sl-viewset" role="group" aria-label="Camera">
+          <button class="sl-btn" data-view="iso" type="button">Iso</button>
+          <button class="sl-btn" data-view="top" type="button">Top</button>
+          <button class="sl-btn" data-view="front" type="button">Front</button>
+          <button class="sl-btn" data-view="left" type="button">Left</button>
+        </div>
+      </div>
+      <div class="sl-dock-mid">
+        <button class="sl-check-status" id="check-status" type="button"></button>
+        <div class="sl-stats" id="stats"></div>
+      </div>
+      <div class="sl-legend" id="legend"></div>
+    </div>
 
     <div class="sl-backdrop" id="backdrop"></div>
 
