@@ -733,24 +733,78 @@
    * identically. Nearest-endpoint ordering zig-zags, which alternates which side
    * of each bead gets squashed and leaves a visible banding on top surfaces.
    */
-  function orderMonotonic(lines, angleDeg) {
+  function orderMonotonic(lines, angleDeg, start) {
     var rad = angleDeg * Math.PI / 180;
     // Across-the-lines direction, and along-the-lines direction.
     var ax = -Math.sin(rad), ay = Math.cos(rad);
     var lx = Math.cos(rad), ly = Math.sin(rad);
 
     var scored = lines.map(function (line) {
-      var sum = 0;
-      for (var i = 0; i < line.length; i++) sum += line[i].X * ax + line[i].Y * ay;
-      var across = sum / line.length;
+      var sum = 0, lo = Infinity, hi = -Infinity;
+      for (var i = 0; i < line.length; i++) {
+        sum += line[i].X * ax + line[i].Y * ay;
+        var along = line[i].X * lx + line[i].Y * ly;
+        if (along < lo) lo = along;
+        if (along > hi) hi = along;
+      }
       var head = line[0].X * lx + line[0].Y * ly;
       var tail = line[line.length - 1].X * lx + line[line.length - 1].Y * ly;
-      // Every line runs the same way along the fill direction.
-      return { line: head <= tail ? line : line.slice().reverse(), across: across };
+      // Every line runs the same way along the fill direction. That is what
+      // monotonic means and what makes the surface catch the light evenly.
+      return { line: head <= tail ? line : line.slice().reverse(),
+               across: sum / line.length, lo: lo, hi: hi };
     });
-
     scored.sort(function (a, b) { return a.across - b.across; });
-    return scored.map(function (entry) { return entry.line; });
+
+    var n = scored.length;
+    if (n < 2) return scored.map(function (e) { return e.line; });
+
+    /**
+     * What monotonic actually asks for is that a line is never laid beside one
+     * that will be laid later — so the bead always has a finished neighbour on
+     * the same side, and the surface comes out even.
+     *
+     * Two lines that do not lie beside each other say nothing about each other.
+     * A ring is the case that matters: at every sweep position there is a line
+     * on the left of the hole and one on the right, and they never touch. Order
+     * them by sweep position alone and the nozzle crosses the ring twice per
+     * position — on a sphere that was 232 metres of travel and 43 minutes, for
+     * a constraint that was never real. Ordering only what genuinely overlaps
+     * lets it run down one side and back up the other, and the surface looks
+     * exactly the same.
+     */
+    var after = new Array(n), indegree = new Int32Array(n);
+    for (var i = 0; i < n; i++) after[i] = [];
+    for (i = 0; i < n; i++) {
+      for (var j = i + 1; j < n; j++) {
+        if (scored[j].lo < scored[i].hi && scored[i].lo < scored[j].hi) {
+          after[i].push(j);
+          indegree[j]++;
+        }
+      }
+    }
+
+    var out = [], done = new Uint8Array(n);
+    var cx = start ? start.X : scored[0].line[0].X;
+    var cy = start ? start.Y : scored[0].line[0].Y;
+    for (var placed = 0; placed < n; placed++) {
+      var best = -1, bestD = Infinity;
+      for (i = 0; i < n; i++) {
+        if (done[i] || indegree[i] > 0) continue;
+        var head = scored[i].line[0];
+        var d = (head.X - cx) * (head.X - cx) + (head.Y - cy) * (head.Y - cy);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      // A cycle cannot happen — every edge runs from a smaller sweep position
+      // to a larger one — but a file that produced one must still come out.
+      if (best < 0) { for (i = 0; i < n; i++) if (!done[i]) { best = i; break; } }
+      done[best] = 1;
+      out.push(scored[best].line);
+      var tailPt = scored[best].line[scored[best].line.length - 1];
+      cx = tailPt.X; cy = tailPt.Y;
+      for (var k = 0; k < after[best].length; k++) indegree[after[best][k]]--;
+    }
+    return out;
   }
 
   /** Greedy nearest-endpoint ordering; returns polylines possibly reversed. */
@@ -3067,7 +3121,7 @@
     if (fit) spacing = fitSpacing(region, spacing, angle);
     var lines = I.generateInfill(pattern, region, spacing, angle, z);
     if (!lines.length) return;
-    lines = monotonic ? I.orderMonotonic(lines, angle) : I.orderPolylines(lines, from);
+    lines = monotonic ? I.orderMonotonic(lines, angle, from) : I.orderPolylines(lines, from);
     // Monotonic ordering exists so every line is laid in the same direction
     // against the one before it; joining them would undo exactly that.
     // Only straight parallel lines join cleanly end to end. Joining a curved

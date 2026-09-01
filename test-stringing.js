@@ -206,7 +206,127 @@ var raw = segments(slice(CYL, { gcodeResolution: 0 }));
 ok('which is the thinning doing it, not the shape (' + raw.tiny + ' without it)',
   raw.tiny > 100, String(raw.tiny));
 
-console.log('\n=== 5. against the reference ===');
+console.log('\n=== 5. how far it goes to get there ===');
+// Monotonic top surfaces exist so every line is laid the same way and the
+// surface catches the light evenly. What they do NOT ask for is that a line
+// wait for one it never touches — and a ring has a line on each side of the
+// hole at every sweep position. Ordered by sweep position alone the nozzle
+// crosses the ring twice per position: on a sphere that was 232 metres of
+// travel and 43 minutes, for a constraint that was never real.
+function travelled(gcode) {
+  var lines = gcode.split('\n'), x = 0, y = 0, mm = 0, n = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var L = lines[i].split(';')[0].trim();
+    if (!/^G[01]\b/.test(L)) continue;
+    var nx = x, ny = y;
+    var mx = /X(-?[\d.]+)/.exec(L); if (mx) nx = parseFloat(mx[1]);
+    var my = /Y(-?[\d.]+)/.exec(L); if (my) ny = parseFloat(my[1]);
+    var d = Math.hypot(nx - x, ny - y);
+    if (d > 0 && !/E-?\d/.test(L)) { mm += d; n++; }
+    x = nx; y = ny;
+  }
+  return { m: mm / 1000, n: n };
+}
+function sphereTris(r, cx, cy, cz, n) {
+  var t = [];
+  function pt(u, v) {
+    var th = u / n * Math.PI, ph = v / n * 2 * Math.PI;
+    return [cx + r*Math.sin(th)*Math.cos(ph), cy + r*Math.sin(th)*Math.sin(ph), cz + r*Math.cos(th)];
+  }
+  for (var i = 0; i < n; i++) {
+    for (var j = 0; j < n; j++) {
+      var a = pt(i,j), b = pt(i+1,j), c = pt(i+1,j+1), d = pt(i,j+1);
+      t.push(a, b, c, a, c, d);
+    }
+  }
+  return t;
+}
+var BALL = sphereTris(25, 150, 150, 25, 48);
+function sliceBall(over) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'standard_02');
+  s.skirtLoops = 0; s.brimWidth = 0;
+  for (var k in over) s[k] = over[k];
+  return E.slice({ positions: flat(BALL), settings: s }, function () {});
+}
+var withMono = sliceBall({ monotonicSurfaces: 'top' });
+var without = sliceBall({ monotonicSurfaces: 'none' });
+var a = travelled(withMono.gcode), b = travelled(without.gcode);
+console.log('  a 50 mm sphere: ' + a.m.toFixed(1) + ' m of travel with monotonic tops, ' +
+  b.m.toFixed(1) + ' m without');
+ok('an even top surface does not cost the print (' + a.m.toFixed(1) + ' m against ' +
+   b.m.toFixed(1) + ')', a.m < b.m * 1.6, a.m.toFixed(1) + ' vs ' + b.m.toFixed(1));
+ok('and the estimate stays in the same country (' +
+   (withMono.stats.seconds / 60).toFixed(0) + ' min against ' +
+   (without.stats.seconds / 60).toFixed(0) + ')',
+  withMono.stats.seconds < without.stats.seconds * 1.3,
+  withMono.stats.seconds + ' vs ' + without.stats.seconds);
+
+// The point of the ordering has to survive the saving: on a surface with no
+// hole in it, every line still waits for the one beside it.
+var square = [];
+(function () {
+  var w = 30, h = 4, cx = 150, cy = 150;
+  var x0=cx-w/2, x1=cx+w/2, y0=cy-w/2, y1=cy+w/2;
+  function qd(a,b,c,e){ square.push(a,b,c,a,c,e); }
+  var A=[x0,y0,0],B=[x1,y0,0],C=[x1,y1,0],D=[x0,y1,0];
+  var E2=[x0,y0,h],F=[x1,y0,h],G=[x1,y1,h],H=[x0,y1,h];
+  qd(A,D,C,B); qd(E2,F,G,H); qd(A,B,F,E2); qd(B,C,G,F); qd(C,D,H,G); qd(D,A,E2,H);
+})();
+var sq = P.buildSettings('artillery_x2', 'pla', 'standard_02');
+sq.skirtLoops = 0; sq.brimWidth = 0; sq.monotonicSurfaces = 'top'; sq.ironing = 'none';
+var flatTop = E.slice({ positions: flat(square), settings: sq }, function () {}).gcode;
+// Every top-solid line on the last layer, in the order they were printed.
+var order = [], seen = {}, z = '', type = '', px = 0, py = 0, run = null;
+// Extrusion is a rising E, not the letter E. In absolute mode the wipe that
+// starts a retraction carries an E lower than the one before it, and reading
+// it as a line makes every other line look as if it ran backwards.
+var lastE = 0, relative = false;
+flatTop.split('\n').forEach(function (raw) {
+  var mz = /^;Z:([\d.]+)/.exec(raw); if (mz) { z = mz[1]; run = null; }
+  var t = /^;\s*TYPE:(.*)$/i.exec(raw);
+  if (t) { type = t[1].trim().toLowerCase(); run = null; }
+  var L = raw.split(';')[0].trim();
+  if (/^M83\b/.test(L)) { relative = true; return; }
+  if (/^M82\b/.test(L)) { relative = false; return; }
+  if (/^G92\b/.test(L)) { var g = /E(-?[\d.]+)/.exec(L); if (g) lastE = parseFloat(g[1]); return; }
+  if (!/^G[01]\b/.test(L)) return;
+  var nx = px, ny = py, de = 0;
+  var mx = /X(-?[\d.]+)/.exec(L); if (mx) nx = parseFloat(mx[1]);
+  var my = /Y(-?[\d.]+)/.exec(L); if (my) ny = parseFloat(my[1]);
+  var me = /E(-?[\d.]+)/.exec(L);
+  if (me) {
+    var v = parseFloat(me[1]);
+    de = relative ? v : v - lastE;
+    lastE = relative ? lastE + v : v;
+  }
+  if (de > 1e-6 && /top solid/.test(type) && Math.hypot(nx - px, ny - py) > 1) {
+    if (!run) { run = { z: z, x0: px, y0: py, x1: nx, y1: ny }; (seen[z] = seen[z] || []).push(run); }
+    else { run.x1 = nx; run.y1 = ny; }
+  }
+  px = nx; py = ny;
+});
+var last = Object.keys(seen).sort(function (u, v) { return parseFloat(v) - parseFloat(u); })[0];
+order = seen[last] || [];
+var sameWay = 0, backwards = 0, prevAcross = null;
+if (order.length > 1) {
+  var d0 = Math.hypot(order[0].x1 - order[0].x0, order[0].y1 - order[0].y0);
+  var ax = -(order[0].y1 - order[0].y0) / d0, ay = (order[0].x1 - order[0].x0) / d0;
+  var lx = (order[0].x1 - order[0].x0) / d0, ly = (order[0].y1 - order[0].y0) / d0;
+  order.forEach(function (r) {
+    var len = Math.hypot(r.x1 - r.x0, r.y1 - r.y0) || 1;
+    if (((r.x1 - r.x0) / len) * lx + ((r.y1 - r.y0) / len) * ly > 0.9) sameWay++;
+    var across = ((r.x0 + r.x1) / 2) * ax + ((r.y0 + r.y1) / 2) * ay;
+    if (prevAcross !== null && across < prevAcross - 0.05) backwards++;
+    prevAcross = across;
+  });
+}
+console.log('  a flat top: ' + order.length + ' lines, ' + sameWay + ' laid the same way, ' +
+  backwards + ' out of sweep order');
+ok('a flat top is still laid one way throughout (' + sameWay + ' of ' + order.length + ')',
+  order.length > 5 && sameWay === order.length, sameWay + '/' + order.length);
+ok('and still in sweep order from one side to the other', backwards === 0, String(backwards));
+
+console.log('\n=== 6. against the reference ===');
 var REF = (function () {
   try { return cp.execSync('command -v prusa-slicer', { encoding: 'utf8' }).trim(); }
   catch (e) { return null; }
