@@ -250,13 +250,25 @@ D.scan({ base: '192.168.1', from: 1, to: 60, fetch: net, timeout: 50, width: 40 
     });
   })
   .then(function () {
-    // A broadcast that nobody answers must not hang the panel forever.
+    // Only Elegoo's firmware answers that broadcast. An OctoPrint is a
+    // computer with no such protocol, so silence is not an answer — the sweep
+    // has to follow, or a machine that cannot shout is never found.
     globalThis.AndroidSlicer = { discover: function () { /* silence */ } };
+    var swept = [];
+    // Nothing at home: every address refuses, the way an empty range does.
+    var probe = function (url) {
+      swept.push(url);
+      return Promise.reject(new Error('connection refused'));
+    };
     var started = Date.now();
-    return D.auto({ timeout: 250 }).then(function (found) {
+    return D.auto({
+      timeout: 250, fetch: probe, base: '10.0.0', from: 1, to: 2, ports: [80]
+    }).then(function (found) {
       delete globalThis.AndroidSlicer;
-      ok('a silent network gives up in its own time (' + (Date.now() - started) + ' ms)',
-        found.length === 0 && Date.now() - started < 2000);
+      ok('a broadcast nobody answers is followed by a sweep, not given up on',
+        swept.length > 0, swept.length + ' addresses tried');
+      ok('and it still finishes in its own time (' + (Date.now() - started) + ' ms)',
+        found.length === 0 && Date.now() - started < 8000);
     });
   })
   .then(done, function (err) {

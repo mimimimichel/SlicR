@@ -291,8 +291,18 @@
    */
   function auto(opts) {
     opts = opts || {};
+    // The app's own broadcast first: it is instant and it is what the printers
+    // themselves answer. But only Elegoo's firmware answers it — an OctoPrint
+    // is a computer on the network with no such protocol — so finding nothing
+    // that way is not finding nothing, and the sweep still runs.
     if (!opts.noNative && root.AndroidSlicer && root.AndroidSlicer.discover) {
-      return nativeDiscover(opts);
+      return nativeDiscover(opts).then(function (found) {
+        if (found.length || (opts.cancelled && opts.cancelled())) return found;
+        var rest = {};
+        for (var k in opts) if (Object.prototype.hasOwnProperty.call(opts, k)) rest[k] = opts[k];
+        rest.noNative = true;
+        return auto(rest);
+      });
     }
     return findSubnets(opts).then(function (bases) {
       var all = [];

@@ -104,6 +104,35 @@ function request(method, url, headers, body) {
   ok('the page sees a native transport', await page.evaluate(() =>
     !!window.OrcaFetch && window.OrcaNet.isNative()));
 
+  // --- Finding the printer, without being told where it is -----------------
+  // The app broadcasts first, which only Elegoo's firmware answers; an
+  // OctoPrint is a computer with no such protocol. So a silent broadcast has
+  // to be followed by a sweep, and inside the app that sweep can only work
+  // through the same native transport.
+  await page.evaluate(() => {
+    // A broadcast nobody answers, exactly as a network with an OctoPrint on it
+    // would behave.
+    window.AndroidSlicer.discover = function () {
+      setTimeout(function () { window.OrcaDiscoverResult('[]'); }, 10);
+    };
+    window.OrcaDiscover.COMMON.length = 0;
+    window.OrcaDiscover.COMMON.push('127.0.0');
+    window.OrcaDiscover.PORTS.length = 0;
+    window.OrcaDiscover.PORTS.push(5098, 5099);
+    window.OrcaDiscover.LANDMARKS.length = 0;
+    window.OrcaDiscover.LANDMARKS.push(1, 2);
+  });
+  const found = await page.evaluate(async () => {
+    const list = await window.OrcaDiscover.auto({ timeout: 1500, key: 'TESTKEY' });
+    return list.map(d => ({ host: d.host, port: d.port, kind: d.kind, name: d.name }));
+  });
+  ok('both printers are found without anyone typing an address (' +
+    found.map(d => d.host + ':' + d.port).join(', ') + ')',
+    found.length === 2, JSON.stringify(found));
+  ok('and each is named by its own answer',
+    found.some(d => d.kind === 'elegoo_cc2') && found.some(d => d.kind === 'octoprint'),
+    JSON.stringify(found.map(d => d.kind + ':' + d.name)));
+
   // --- OctoPrint, whose CORS is off, as it ships ---------------------------
   await page.click('#btn-panel').catch(() => {});
   await page.waitForTimeout(200);

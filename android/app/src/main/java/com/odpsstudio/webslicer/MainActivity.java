@@ -44,6 +44,8 @@ import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -76,6 +78,17 @@ public class MainActivity extends Activity {
     private FileOutputStream gcodeStream;
     /** Bytes actually written for the file being streamed, so the page can check. */
     private long pendingGcodeBytes;
+
+    /**
+     * Requests to printers run here. A sweep of a subnet is hundreds of them:
+     * a few at a time keeps the device answering, and one thread per address
+     * would not.
+     */
+    private final ExecutorService requests = Executors.newFixedThreadPool(8, r -> {
+        Thread t = new Thread(r, "printer-request");
+        t.setDaemon(true);
+        return t;
+    });
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -185,6 +198,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         closeGcodeStream();
+        requests.shutdownNow();
         if (webView != null) {
             webView.destroy();
             webView = null;
@@ -443,7 +457,7 @@ public class MainActivity extends Activity {
      */
     private void sendRequest(final String id, final String method, final String url,
                              final String headersJson, final String body, final File staged) {
-        new Thread(() -> {
+        requests.execute(() -> {
             HttpURLConnection conn = null;
             try {
                 conn = (HttpURLConnection) new URL(url).openConnection();
@@ -482,7 +496,7 @@ public class MainActivity extends Activity {
                 if (conn != null) conn.disconnect();
                 if (staged != null) runOnUiThread(MainActivity.this::discardPendingGcode);
             }
-        }, "printer-request").start();
+        });
     }
 
     private Map<String, String> parseHeaders(String json) {
