@@ -4087,6 +4087,11 @@
     var minJunction = 5;
     var entry = new Float64Array(n), exit = new Float64Array(n), junction = new Float64Array(n + 1);
 
+    // Marlin's classic jerk is per axis, not on the velocity vector, which
+    // makes it more permissive through a corner than the vector form — and the
+    // vector form, tried here, made every estimate longer rather than shorter.
+    // A fraction of the speed by the angle is the closer model of the two,
+    // measured against the reference on a cube and on a sphere.
     for (var i = 1; i < n; i++) {
       var vlim = Math.min(moves.V[i - 1], moves.V[i]);
       var factor = Math.max(0, moves.C[i]);
