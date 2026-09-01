@@ -887,6 +887,20 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 }
 .sl-advice-actions .sl-btn { padding: 4px 10px; font-size: 12px; }
 
+/* The faults somebody can name, laid out to be read down rather than across:
+   a wall of equal buttons is a wall, and this is a list to look through. */
+.sl-symptoms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+.sl-symptoms .sl-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  text-align: left;
+}
+
 /* The send button only exists once there is a printer to send to, and the
    button's own display rule would otherwise win against [hidden]. */
 #btn-send[hidden] { display: none !important; }

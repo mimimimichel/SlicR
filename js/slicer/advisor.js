@@ -141,6 +141,31 @@
   var WARPS = { abs: 1, abs_cf: 1, asa: 1, pa: 1, pa_cf: 1, pc: 1, pp: 1 };
 
   /**
+   * A proposal, or nothing when the setting is already where it would put it.
+   * Shared by every rule below: one shape in, one shape out, so the panel and
+   * the tests only ever deal with one kind of thing.
+   */
+  function proposer(s, out) {
+    return function (key, value, label, why, kind) {
+      var from = get(s, key);
+      if (from === value) return;
+      if (typeof from === 'number' && typeof value === 'number' &&
+          Math.abs(from - value) < 1e-9) return;
+      out.push({ key: key, value: value, from: from, label: label, why: why,
+        kind: kind || 'quality' });
+    };
+  }
+
+  /** Two decimals, because a setting nobody can type is no use to anyone. */
+  function round2(v) { return Math.round(v * 100) / 100; }
+
+  /** The section of one extruded bead: a rounded rectangle, not a rectangle. */
+  function crossSection(w, h) {
+    if (w <= h) return Math.PI * (w / 2) * (h / 2);
+    return h * (w - h) + Math.PI * (h / 2) * (h / 2);
+  }
+
+  /**
    * @param {object} shape   from measure()
    * @param {object} s       the full settings object
    * @returns {Array<{key,value,from,label,why,kind}>}
@@ -149,14 +174,7 @@
     var out = [];
     if (!shape || shape.empty || !s) return out;
 
-    function propose(key, value, label, why, kind) {
-      var from = get(s, key);
-      if (from === value) return;
-      if (typeof from === 'number' && typeof value === 'number' &&
-          Math.abs(from - value) < 1e-9) return;
-      out.push({ key: key, value: value, from: from, label: label, why: why,
-        kind: kind || 'quality' });
-    }
+    var propose = proposer(s, out);
 
     var nozzle = s.nozzle || 0.4;
     var warps = !!WARPS[s.filamentKey];
@@ -287,7 +305,466 @@
     return out;
   }
 
-  var api = { measure: measure, advise: advise };
+  // ---------------------------------------------------------------------------
+  // The profile on its own
+  // ---------------------------------------------------------------------------
+
+  /**
+   * What is wrong with these settings whatever the model turns out to be.
+   *
+   * Everything here comes from a ratio the printer cannot argue with — a layer
+   * against the nozzle that laid it, a wall against the line it is made of, a
+   * speed against the plastic that has to melt to reach it. None of it needs
+   * the mesh, so it can be shown the moment a profile is picked, and it is the
+   * same arithmetic whichever printer is chosen.
+   *
+   * @param {object} s   the full settings object
+   * @returns {Array<{key,value,from,label,why,kind}>}
+   */
+  function review(s) {
+    var out = [];
+    if (!s) return out;
+    var propose = proposer(s, out);
+    var nozzle = s.nozzle || 0.4;
+    var stock = (root.OrcaPresets && root.OrcaPresets.FILAMENTS &&
+                 root.OrcaPresets.FILAMENTS[s.filamentKey]) || null;
+
+    // --- what one layer can hold on to --------------------------------------
+
+    // Three quarters of the nozzle is where every slicer puts the ceiling. Past
+    // it the new bead sits on too little of the one below to key into, and the
+    // part splits along the lines under any load at all.
+    var ceiling = round2(nozzle * 0.75);
+    if (s.layerHeight > ceiling + 1e-9) {
+      propose('layerHeight', ceiling, 'Layers too thick for this nozzle',
+        s.layerHeight + ' mm out of a ' + nozzle + ' mm nozzle is ' +
+        Math.round(100 * s.layerHeight / nozzle) + '% of its width. Past three quarters ' +
+        'there is too little of the layer below for the new one to key into, and the ' +
+        'part comes apart along the lines.', 'reliability');
+    }
+    // A first layer thicker than the nozzle cannot be pressed into the plate:
+    // there is more plastic coming out than the gap can hold.
+    if (s.firstLayerHeight > nozzle + 1e-9) {
+      propose('firstLayerHeight', ceiling, 'First layer thicker than the nozzle',
+        s.firstLayerHeight + ' mm through a ' + nozzle + ' mm nozzle leaves the bead ' +
+        'nothing to be squashed against. The first layer sticks because it is pressed ' +
+        'into the plate, and this one is not.', 'reliability');
+    }
+
+    // --- what a line is made of ---------------------------------------------
+
+    if (s.lineWidth < nozzle - 1e-9) {
+      propose('lineWidth', round2(nozzle * 1.05), 'Lines narrower than the nozzle',
+        'A ' + nozzle + ' mm nozzle cannot lay a ' + s.lineWidth + ' mm line. Asking for ' +
+        'one gives thin walls and gaps between them, because the bead comes out its own ' +
+        'width whatever the file says.', 'reliability');
+    } else if (s.lineWidth > nozzle * 1.6) {
+      propose('lineWidth', round2(nozzle * 1.2), 'Lines much wider than the nozzle',
+        s.lineWidth + ' mm from a ' + nozzle + ' mm nozzle is ' +
+        (s.lineWidth / nozzle).toFixed(1) + ' times its width. The bead has to spread ' +
+        'sideways to get there, which it does unevenly.', 'quality');
+    }
+
+    // --- how much material is between the inside and the outside ------------
+
+    var top = (s.topLayers || 0) * s.layerHeight;
+    if (s.topLayers > 0 && top < 0.6 && !s.spiralVase) {
+      propose('topLayers', Math.ceil(0.8 / s.layerHeight), 'Not enough on top',
+        s.topLayers + ' layers of ' + s.layerHeight + ' mm is ' + round2(top) + ' mm of ' +
+        'roof over the infill. Under about 0.8 mm it dips between the lines below it — ' +
+        'the pillowing that makes a top look like a mattress.', 'quality');
+    }
+    var bottom = (s.bottomLayers || 0) * s.layerHeight;
+    if (s.bottomLayers > 0 && bottom < 0.5 && !s.spiralVase) {
+      propose('bottomLayers', Math.ceil(0.6 / s.layerHeight), 'Not enough underneath',
+        round2(bottom) + ' mm of floor. It is what the whole part stands on while it is ' +
+        'being printed, and it is thinner than a fingernail.', 'reliability');
+    }
+    var wall = s.wallLoops > 0
+      ? (s.externalLineWidth || s.lineWidth) + (s.wallLoops - 1) * s.lineWidth : 0;
+    if (s.wallLoops > 0 && wall < 0.8 && !s.spiralVase) {
+      propose('wallLoops', Math.max(2, Math.ceil(0.9 / s.lineWidth)), 'Walls too thin to hold',
+        s.wallLoops + ' loop' + (s.wallLoops > 1 ? 's' : '') + ' makes a ' + round2(wall) +
+        ' mm wall. That is the whole strength of the part in the direction it is weakest.',
+        'reliability');
+    }
+    // A roof needs something to be built over.
+    if (s.infillDensity < 5 && s.topLayers > 0 && !s.spiralVase) {
+      propose('infillDensity', 10, 'Solid tops over nothing',
+        'The top is ' + s.topLayers + ' solid layers with ' + s.infillDensity + '% infill ' +
+        'under them. The first of those layers is printed across open space and falls into ' +
+        'it.', 'reliability');
+    }
+
+    // --- speeds nothing will honour -----------------------------------------
+
+    // The firmware holds a move to the machine's maximum whatever the file
+    // asks, so a profile above it is only a wrong estimate. Ours are capped
+    // when they are built; this catches a number typed by hand.
+    if (s.maxSpeed > 0 && s.speeds) {
+      var over = [];
+      for (var j in s.speeds) {
+        if (Object.prototype.hasOwnProperty.call(s.speeds, j) && s.speeds[j] > s.maxSpeed) {
+          over.push(j);
+        }
+      }
+      if (over.length) {
+        out.push({ key: null, label: 'Speeds past what the machine allows',
+          why: over.length + ' of the speeds are above the ' + s.maxSpeed + ' mm/s this ' +
+            'machine is set to, starting with ' + over[0].replace(/([A-Z])/g, ' $1').toLowerCase() +
+            '. The firmware holds them there whatever the file asks for.',
+          kind: 'time' });
+      }
+    }
+
+    // --- support that cannot be taken off -----------------------------------
+
+    if (s.supportEnable && s.supportZGap < s.layerHeight * 0.5) {
+      propose('supportZGap', round2(s.layerHeight), 'Support welded to the part',
+        s.supportZGap + ' mm between the support and what it holds, on ' + s.layerHeight +
+        ' mm layers. Below about half a layer the two fuse and the support has to be cut ' +
+        'off rather than lifted off.', 'quality');
+    }
+
+    // --- the fan, against what this plastic wants ---------------------------
+
+    if (stock) {
+      if (stock.fanSpeed >= 80 && s.fanSpeed < stock.fanSpeed - 30) {
+        propose('fanSpeed', stock.fanSpeed, 'More air for this filament',
+          stock.name + ' sets at ' + stock.fanSpeed + '% and this profile runs ' + s.fanSpeed +
+          '%. Without the air an overhang droops and a small layer never sets before the ' +
+          'next one lands on it.', 'quality');
+      } else if (stock.fanSpeed <= 25 && s.fanSpeed > stock.fanSpeed + 25) {
+        propose('fanSpeed', stock.fanSpeed, 'Less air for this filament',
+          stock.name + ' shrinks as it cools, and cooling it fast is what splits it layer ' +
+          'from layer. It sets at ' + stock.fanSpeed + '%; this profile runs ' + s.fanSpeed + '%.',
+          'reliability');
+      }
+    }
+
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // What went wrong last time
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The faults somebody can see on a part they are holding, in their words
+   * rather than a slicer's. Each one is answered by remedies() below with
+   * changes worked out from the profile in front of it — never a fixed list,
+   * because the right retraction for a machine already retracting 4 mm is not
+   * the right retraction for one at 0.8.
+   */
+  var SYMPTOMS = [
+    { key: 'stringing', label: 'Strings and whiskers',
+      hint: 'Fine threads between the parts, or across a gap' },
+    { key: 'blobs', label: 'Blobs and bumps',
+      hint: 'A pimple where each loop starts or ends' },
+    { key: 'firstlayer', label: 'The first layer will not stick',
+      hint: 'Lines lifting, or the part coming loose' },
+    { key: 'warping', label: 'Corners lifting off the plate',
+      hint: 'The bottom curls up as the part gets taller' },
+    { key: 'elephant', label: 'The bottom is wider than the rest',
+      hint: 'A skirt of squashed plastic around the first layer' },
+    { key: 'underextrusion', label: 'Gaps between the lines',
+      hint: 'Thin walls, holes in the top, lines not touching' },
+    { key: 'overextrusion', label: 'Too much plastic',
+      hint: 'Rough walls, bulging corners, a part slightly too big' },
+    { key: 'weak', label: 'The part broke along the layers',
+      hint: 'It came apart where one layer meets the next' },
+    { key: 'shift', label: 'The layers are offset',
+      hint: 'Everything above a certain height is shifted sideways' },
+    { key: 'pillowing', label: 'The top surface is rough',
+      hint: 'Dips and holes over the infill, or a stripy finish' },
+    { key: 'supports', label: 'The supports will not come off',
+      hint: 'Welded to the part, or tearing the surface away' },
+    { key: 'stutter', label: 'The head hesitates while printing',
+      hint: 'It stops for a moment in the middle of a layer' }
+  ];
+
+  /** Keep a number inside a band, and to two decimals. */
+  function clamp(v, lo, hi) { return round2(Math.max(lo, Math.min(hi, v))); }
+
+  /**
+   * What to change for one of those, given this profile.
+   *
+   * Every remedy is bounded: a temperature never moves more than 15 °C from
+   * what the filament is sold as, a retraction never past 6 mm, a flow never
+   * outside a tenth either way. A troubleshooter that walks a setting off the
+   * end of its range over a few prints is worse than no troubleshooter.
+   *
+   * @param {string} key   one of SYMPTOMS
+   * @param {object} s     the full settings object
+   * @returns {Array<{key,value,from,label,why,kind}>}
+   */
+  function remedies(key, s) {
+    var out = [];
+    if (!s) return out;
+    var propose = proposer(s, out);
+    var nozzle = s.nozzle || 0.4;
+    var stock = (root.OrcaPresets && root.OrcaPresets.FILAMENTS &&
+                 root.OrcaPresets.FILAMENTS[s.filamentKey]) || null;
+    var nominal = stock ? stock.nozzleTemp : s.nozzleTemp;
+    var warps = !!WARPS[s.filamentKey];
+
+    /** A nozzle temperature, held within 15 °C of what this filament is sold as. */
+    function nozzleTemp(delta) {
+      return Math.round(clamp(s.nozzleTemp + delta, nominal - 15,
+        Math.min(nominal + 15, s.maxNozzleTemp || 300)));
+    }
+
+    switch (key) {
+
+      case 'stringing':
+        // Order matters: the first two cost nothing and fix most of it.
+        if (s.combing) {
+          propose('combing', false, 'Retract on every travel',
+            'Skipping the retraction inside the part is what leaves threads across it. ' +
+            'Off, the nozzle pulls back before every travel over ' + s.minTravelForRetract +
+            ' mm.', 'reliability');
+        }
+        if (!s.wipeOnRetract) {
+          propose('wipeOnRetract', true, 'Wipe as it retracts',
+            'Pulling back while still moving along the line bleeds the pressure off into ' +
+            'the part rather than into the air.', 'quality');
+        }
+        propose('retractLength', clamp(s.retractLength + 0.4, 0.4, 6),
+          'Pull the filament back further',
+          s.retractLength + ' mm is what is being pulled back now. Another few tenths takes ' +
+          'the pressure off the melt before the nozzle leaves.', 'quality');
+        if (s.retractSpeed < 35) {
+          propose('retractSpeed', 40, 'Pull it back faster',
+            'At ' + s.retractSpeed + ' mm/s the nozzle is already moving before the pressure ' +
+            'is off.', 'quality');
+        }
+        if (s.nozzleTemp > nominal - 15) {
+          propose('nozzleTemp', nozzleTemp(-5), 'A little cooler',
+            'Hotter plastic is thinner plastic, and thin plastic runs out of the nozzle on ' +
+            'its own. Five degrees at a time, watching that the layers still bond.', 'quality');
+        }
+        break;
+
+      case 'blobs':
+        if (!s.seamScarf) {
+          propose('seamScarf', true, 'Spread the seam out',
+            'A loop that starts and stops at one point leaves a pimple there. Ramping the ' +
+            'flow over the first ' + s.scarfLength + ' mm and carrying past the start spreads ' +
+            'it along the wall instead.', 'quality');
+        }
+        if (s.seamPosition === 'random') {
+          propose('seamPosition', 'aligned', 'Put the seams in a line',
+            'Scattered seams put a blob somewhere different on every layer, which reads as ' +
+            'a rough wall. Stacked, they are one line that can be hidden or sanded.', 'quality');
+        }
+        if (!s.wipeOnRetract) {
+          propose('wipeOnRetract', true, 'Wipe as it retracts',
+            'The pressure left in the nozzle at the end of a loop has to go somewhere. ' +
+            'Wiping puts it back into the line just printed.', 'quality');
+        }
+        propose('nozzleTemp', nozzleTemp(-5), 'A little cooler',
+          'The nozzle keeps pushing after the move has stopped, and how much it pushes ' +
+          'depends on how runny the plastic is.', 'quality');
+        // The real cure on a Marlin machine is linear advance, and it is not a
+        // slicer setting: it is a number that belongs to the printer.
+        if (!/M900|SET_PRESSURE_ADVANCE/.test(s.startGcode || '')) {
+          out.push({ key: null, label: 'Linear advance is not set on this machine',
+            why: 'A blob at the end of every line is pressure the nozzle is still pushing as ' +
+              'it slows down, and linear advance is what holds it steady. It has to be ' +
+              'calibrated on the machine — print a K-factor tower, then add M900 K<value> to ' +
+              'the start G-code. Where the maker publishes a value this app already sends it.',
+            kind: 'quality' });
+        }
+        break;
+
+      case 'firstlayer':
+        // Only when it is actually the wrong thickness: a first layer already
+        // in the band is not made to stick better by moving it a hundredth.
+        if (s.firstLayerHeight > nozzle * 0.7 || s.firstLayerHeight < nozzle * 0.4) {
+          propose('firstLayerHeight', clamp(nozzle * 0.6, 0.08, nozzle),
+            'Press the first layer down',
+            'The first layer sticks because it is squashed into the plate. ' +
+            s.firstLayerHeight + ' mm out of a ' + nozzle + ' mm nozzle is ' +
+            (s.firstLayerHeight > nozzle * 0.7 ? 'too much of the gap to fill — the bead is ' +
+              'laid rather than pressed' : 'too little — the nozzle drags through what it ' +
+              'has already put down') + '.', 'reliability');
+        }
+        if (s.speeds && s.speeds.firstLayer > 25) {
+          propose('speeds.firstLayer', 20, 'Slow the first layer down',
+            s.speeds.firstLayer + ' mm/s gives the plastic no time against a cold plate.',
+            'reliability');
+        }
+        if (s.adhesion !== 'brim') {
+          propose('adhesion', 'brim', 'Print a brim',
+            'A skirt does not hold anything down. A brim is printed against the part and ' +
+            'holds its edges while the rest goes up.', 'reliability');
+        }
+        propose('firstLayerBedTemp', Math.min((s.firstLayerBedTemp || 0) + 5, s.maxBedTemp || 120),
+          'Five degrees more on the plate',
+          'Plastic sticks to a plate it can stay soft against a moment longer.', 'reliability');
+        if (s.firstLayerFanSpeed > 0) {
+          propose('firstLayerFanSpeed', 0, 'No fan on the first layer',
+            'Cooling the first layer is cooling the one thing that has to stay stuck.',
+            'reliability');
+        }
+        break;
+
+      case 'warping':
+        if (s.adhesion !== 'brim') {
+          propose('adhesion', 'brim', 'Print a brim',
+            'The corners lift because the part shrinks as it cools and the plate only holds ' +
+            'the middle. A brim widens what is holding.', 'reliability');
+        }
+        if (s.fanFromLayer < 3 && warps) {
+          propose('fanFromLayer', 4, 'Keep the fan off for longer',
+            (stock ? stock.name : 'This filament') + ' pulls its corners up when it is ' +
+            'cooled quickly. Leaving the fan off for the first few layers lets the bottom set ' +
+            'evenly.', 'reliability');
+        }
+        if (warps && s.maxChamberTemp > 0 && !s.chamberTemp) {
+          propose('chamberTemp', Math.min(50, s.maxChamberTemp), 'Warm the chamber',
+            'This machine has a chamber heater, and warm air around the part is what stops ' +
+            'it shrinking away from the plate.', 'reliability');
+        }
+        propose('bedTemp', Math.min((s.bedTemp || 0) + 5, s.maxBedTemp || 120),
+          'Five degrees more on the plate',
+          'A warmer plate keeps the bottom of the part from setting before the top of it does.',
+          'reliability');
+        break;
+
+      case 'elephant':
+        propose('elephantFootCompensation', clamp((s.elephantFootCompensation || 0) + 0.15, 0.1, 0.5),
+          'Pull the first layer in',
+          'The first layer is squashed on purpose, and it spreads. This takes that much back ' +
+          'off its outline so the part measures the same at the bottom as it does higher up.',
+          'quality');
+        propose('firstLayerBedTemp', Math.max((s.firstLayerBedTemp || 0) - 5, 0),
+          'Five degrees less on the plate',
+          'A very hot plate keeps the bottom soft while the weight of the part presses down ' +
+          'on it.', 'quality');
+        break;
+
+      case 'underextrusion':
+        propose('flowRatio', clamp((s.flowRatio || 1) + 0.03, 0.9, 1.1), 'A little more flow',
+          'Every line is coming out thinner than it was asked for. Three percent at a time, ' +
+          'measuring a wall with calipers after each.', 'quality');
+        propose('nozzleTemp', nozzleTemp(+5), 'A little hotter',
+          'Plastic that cannot melt fast enough comes out thin however hard it is pushed.',
+          'quality');
+        if (s.maxVolumetric > 8) {
+          propose('maxVolumetric', round2(s.maxVolumetric * 0.85), 'Ask the hotend for less',
+            'The hotend is set to melt ' + s.maxVolumetric + ' mm³/s. If it cannot really do ' +
+            'that, every fast move is starved — and the fast moves are the infill that holds ' +
+            'the part together.', 'quality');
+        }
+        if (s.infillOverlap < 0.25) {
+          propose('infillOverlap', 0.25, 'Overlap the infill further into the walls',
+            'The gap between the infill and the wall is where a part comes apart.', 'quality');
+        }
+        break;
+
+      case 'overextrusion':
+        propose('flowRatio', clamp((s.flowRatio || 1) - 0.03, 0.9, 1.1), 'A little less flow',
+          'Bulging corners and a part measuring large mean more plastic is coming out than ' +
+          'the shape needs.', 'quality');
+        propose('xyCompensation', clamp((s.xyCompensation || 0) - 0.05, -0.3, 0.3),
+          'Take the outline in',
+          'This shaves the walls in by that much, which is the quick fix for a part that ' +
+          'measures large while the flow is being sorted out.', 'quality');
+        break;
+
+      case 'weak':
+        propose('wallLoops', Math.min((s.wallLoops || 2) + 1, 6), 'One more wall',
+          'A part is as strong as its walls long before it is as strong as its infill. ' +
+          (s.wallLoops || 2) + ' loops is ' + round2((s.wallLoops || 2) * s.lineWidth) +
+          ' mm of it.', 'reliability');
+        propose('nozzleTemp', nozzleTemp(+5), 'A little hotter',
+          'Layers bond by melting into each other. Cooler plastic makes a prettier part and ' +
+          'a weaker one.', 'reliability');
+        if (s.infillDensity < 25) {
+          propose('infillDensity', 25, 'More infill',
+            s.infillDensity + '% leaves the walls holding everything on their own.',
+            'reliability');
+        }
+        if (s.fanSpeed > 60 && warps) {
+          propose('fanSpeed', 40, 'Less air',
+            'This plastic splits between layers when it is cooled fast, and the fan is what ' +
+            'cools it fast.', 'reliability');
+        }
+        break;
+
+      case 'shift':
+        propose('maxAccel', Math.max(Math.round((s.maxAccel || 3000) * 0.6 / 100) * 100, 500),
+          'Accelerate more gently',
+          'A layer shifts when a motor is asked for more than it can deliver and skips a step. ' +
+          'Acceleration is what asks the most of it.', 'reliability');
+        propose('travelSpeed', Math.max(Math.round((s.travelSpeed || 150) * 0.7), 60),
+          'Travel more slowly',
+          'The fastest thing the machine does is move between the places it prints, and it ' +
+          'does it with no plastic to slow it down.', 'reliability');
+        out.push({ key: null, label: 'And it may not be the file',
+          why: 'A shift that happens at the same height every time is the file. One that ' +
+            'happens somewhere different each time is the machine: a loose belt, a pulley ' +
+            'grub screw, or a motor driver getting hot.',
+          kind: 'warning' });
+        break;
+
+      case 'pillowing':
+        propose('topLayers', Math.max((s.topLayers || 4) + 1, Math.ceil(1 / s.layerHeight)),
+          'More solid layers on top',
+          round2((s.topLayers || 4) * s.layerHeight) + ' mm of roof is being asked to span the ' +
+          'gaps in ' + s.infillDensity + '% infill. Thicker, or denser underneath.', 'quality');
+        if (s.infillDensity < 20) {
+          propose('infillDensity', 20, 'Denser infill under the top',
+            'The top is only as flat as what it is built on.', 'quality');
+        }
+        if (s.ironing === 'none') {
+          propose('ironing', 'top', 'Iron the top',
+            'A second pass with no plastic coming out, melting the ridges flat.', 'quality');
+        }
+        if (s.monotonicSurfaces === 'none') {
+          propose('monotonicSurfaces', 'top', 'Lay the top in one direction',
+            'Lines laid all the same way catch the light the same way. It costs a little ' +
+            'travel and it is most of what makes a top look finished.', 'quality');
+        }
+        break;
+
+      case 'supports':
+        propose('supportZGap', clamp(Math.max(s.supportZGap || 0, s.layerHeight), 0.1, 0.4),
+          'Leave a gap under the part',
+          'At ' + (s.supportZGap || 0) + ' mm the support and the part are printed into each ' +
+          'other. A full layer of air between them is what makes it lift off.', 'quality');
+        if (s.supportStyle !== 'tree') {
+          propose('supportStyle', 'tree', 'Tree supports',
+            'Branches touch the part at a few points instead of holding it along a wall, so ' +
+            'there is far less to break off and far less to mark.', 'quality');
+        }
+        if (s.supportDensity > 20) {
+          propose('supportDensity', 15, 'Thinner support',
+            s.supportDensity + '% is a solid block under the overhang. It only has to hold ' +
+            'the first layer over it.', 'quality');
+        }
+        break;
+
+      case 'stutter':
+        propose('gcodeResolution', clamp(Math.max(s.gcodeResolution || 0, 0.0125) * 2, 0.0125, 0.05),
+          'Fewer, longer moves',
+          'A board that is asked to read more moves than it can act on runs out of planned ' +
+          'motion and stops until it catches up. Joining points closer than this into one ' +
+          'move is what a slicer does about it.', 'reliability');
+        out.push({ key: null, label: 'And check how the file gets there',
+          why: 'A pause of a second or more is usually not the file at all: it is the file ' +
+            'being streamed over USB from a host that had something else to do. Copy the same ' +
+            'G-code to the printer’s own card and print it from there. If the pause goes, ' +
+            'nothing in these settings would have fixed it.',
+          kind: 'warning' });
+        break;
+    }
+    return out;
+  }
+
+  var api = { measure: measure, advise: advise, review: review,
+              SYMPTOMS: SYMPTOMS, remedies: remedies };
   root.OrcaAdvisor = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

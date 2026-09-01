@@ -901,9 +901,41 @@
     q032: quality('0.32 mm — Extra draft', 0.32, 0.35, { p: 100, e: 50, si: 130, i: 200, t: 65, f: 30, sup: 100, b: 45, g: 60, iron: 24 })
   };
 
+  /**
+   * The layer heights a given nozzle can actually lay.
+   *
+   * Above three quarters of the nozzle the new layer has too little of the one
+   * below to key into and the part splits along the lines; far below a fifth
+   * the bead is being squeezed flat for no detail the nozzle can resolve. No
+   * vendor ships outside that band — Orca's 0.4 mm profiles run 0.08 to 0.28 —
+   * and offering the choice is offering a print that will not come out.
+   *
+   * The one already chosen is always kept, so a saved profile never loses the
+   * setting it was saved with.
+   */
+  function qualityFor(nozzle, keep) {
+    var n = nozzle > 0 ? nozzle : 0.4;
+    var out = {};
+    Object.keys(QUALITY).forEach(function (k) {
+      var h = QUALITY[k].layerHeight;
+      if (k === keep || (h <= n * 0.75 + 1e-9 && h >= n * 0.2 - 1e-9)) out[k] = QUALITY[k];
+    });
+    return out;
+  }
+
   // ---------------------------------------------------------------------------
   // Settings assembly
   // ---------------------------------------------------------------------------
+
+  /** A copy of a speed table with nothing in it above what the machine allows. */
+  function capSpeeds(speeds, maxSpeed) {
+    var out = {};
+    for (var k in speeds) {
+      if (!Object.prototype.hasOwnProperty.call(speeds, k)) continue;
+      out[k] = maxSpeed > 0 ? Math.min(speeds[k], maxSpeed) : speeds[k];
+    }
+    return out;
+  }
 
   /** Build a full, flat settings object from the three preset keys. */
   function buildSettings(printerKey, filamentKey, qualityKey) {
@@ -978,7 +1010,10 @@
       // --- Quality ---
       layerHeight: q.layerHeight,
       firstLayerHeight: q.firstLayerHeight,
-      speeds: JSON.parse(JSON.stringify(q.speeds)),
+      // Held to what the machine will actually do. A profile that asks an
+      // Ender for 160 mm/s is not faster than one that asks for 150 — the
+      // firmware refuses it either way — it just makes the estimate a lie.
+      speeds: capSpeeds(q.speeds, p.maxSpeed),
       adaptiveLayers: false,
       adaptiveQuality: 0.5,
 
@@ -1003,8 +1038,13 @@
       supportTipDiameter: Math.round(p.nozzle * 2 * 100) / 100,
       supportTipSpacing: Math.round(p.nozzle * 8 * 100) / 100,
       wallLoops: 2,
-      topLayers: 4,
-      bottomLayers: 3,
+      // A shell is a thickness, not a count. Four layers of 0.06 mm is a
+      // quarter of a millimetre of roof, and it dips between the infill lines
+      // under it — the pillowing that makes a fine print look worse on top
+      // than a coarse one. Orca's own rule: whichever gives more, the count or
+      // the thickness, 0.8 mm over and 0.6 under.
+      topLayers: Math.max(4, Math.ceil(0.8 / q.layerHeight)),
+      bottomLayers: Math.max(3, Math.ceil(0.6 / q.layerHeight)),
       lineWidth: w,
       externalLineWidth: w,
       firstLayerLineWidth: Math.round(p.nozzle * 1.25 * 100) / 100,
@@ -1107,6 +1147,7 @@
     PRINTERS: PRINTERS,
     FILAMENTS: FILAMENTS,
     QUALITY: QUALITY,
+    qualityFor: qualityFor,
     FLAVORS: FLAVORS,
     STARTS: STARTS,
     ENDS: ENDS,

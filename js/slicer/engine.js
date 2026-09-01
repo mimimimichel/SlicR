@@ -3226,6 +3226,9 @@
     if (s.maxVolumetric > 0 && area > 0 && feat.type !== FEATURE.IRONING) {
       speed = Math.min(speed, s.maxVolumetric / area);
     }
+    // And never past what the machine will do. The firmware would hold it
+    // there anyway; asking for more only makes the estimate wrong.
+    if (s.maxSpeed > 0) speed = Math.min(speed, s.maxSpeed);
     return Math.max(1, speed);
   }
 

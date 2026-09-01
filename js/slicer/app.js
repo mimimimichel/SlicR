@@ -37,6 +37,7 @@
     shape: null,
     shapeKey: '',
     adviceDismissed: {},
+    symptom: '',
     // Where a finished file gets sent, if anywhere. One connection, one kind.
     link: { kind: 'none', url: '', key: '', autoStart: false },
     sending: false,
@@ -322,63 +323,76 @@
     return String(v);
   }
 
+  /**
+   * One proposal, as a card: what it is, why, and a button carrying the change
+   * it would make. Shared by the notes on a model, the notes on the profile and
+   * the answers to a fault, because they are all the same kind of thing.
+   */
+  function adviceCard(a, onApply) {
+    var card = document.createElement('div');
+    card.className = 'sl-advice-item' + (a.kind === 'warning' ? ' warning' : '');
+
+    var title = document.createElement('div');
+    title.className = 'msg';
+    title.textContent = a.label;
+    card.appendChild(title);
+
+    var why = document.createElement('div');
+    why.className = 'why';
+    why.textContent = a.why;
+    card.appendChild(why);
+
+    var row = document.createElement('div');
+    row.className = 'sl-advice-actions';
+    if (a.key) {
+      var apply = document.createElement('button');
+      apply.className = 'sl-btn primary';
+      apply.type = 'button';
+      apply.textContent = showValue(a.from) + ' → ' + showValue(a.value);
+      apply.onclick = function () {
+        setPath(state.settings, a.key, a.value);
+        persist();
+        invalidate();
+        if (onApply) onApply();
+        renderPanel();
+      };
+      row.appendChild(apply);
+    }
+    var hide = document.createElement('button');
+    hide.className = 'sl-btn';
+    hide.type = 'button';
+    hide.textContent = 'Dismiss';
+    hide.onclick = function () {
+      state.adviceDismissed[adviceId(a)] = true;
+      renderPanel();
+    };
+    row.appendChild(hide);
+    card.appendChild(row);
+    return card;
+  }
+
   function renderAdvice(body) {
+    // The profile can be wrong on its own, before anything is loaded — a layer
+    // too thick for the nozzle is true of an empty plate too — so the notes on
+    // it come first and do not wait for a model.
+    var all = window.OrcaAdvisor.review(state.settings);
     var shape = currentShape();
-    if (!shape) return;
-    var all = window.OrcaAdvisor.advise(shape, state.settings);
+    if (shape) all = all.concat(window.OrcaAdvisor.advise(shape, state.settings));
     var list = all.filter(function (a) { return !state.adviceDismissed[adviceId(a)]; });
     if (!list.length) return;
 
     var wrap = document.createElement('details');
     wrap.className = 'sl-advice';
+    wrap.id = 'advice-box';
     wrap.open = true;
     var head = document.createElement('summary');
     var changes = list.filter(function (a) { return a.key; }).length;
     head.textContent = list.length + (list.length > 1 ? ' notes' : ' note') +
-      ' on this model' + (changes ? ' — ' + changes + ' can be applied' : '');
+      (shape ? ' on this print' : ' on this profile') +
+      (changes ? ' — ' + changes + ' can be applied' : '');
     wrap.appendChild(head);
 
-    list.forEach(function (a) {
-      var card = document.createElement('div');
-      card.className = 'sl-advice-item' + (a.kind === 'warning' ? ' warning' : '');
-
-      var title = document.createElement('div');
-      title.className = 'msg';
-      title.textContent = a.label;
-      card.appendChild(title);
-
-      var why = document.createElement('div');
-      why.className = 'why';
-      why.textContent = a.why;
-      card.appendChild(why);
-
-      var row = document.createElement('div');
-      row.className = 'sl-advice-actions';
-      if (a.key) {
-        var apply = document.createElement('button');
-        apply.className = 'sl-btn primary';
-        apply.type = 'button';
-        apply.textContent = showValue(a.from) + ' → ' + showValue(a.value);
-        apply.onclick = function () {
-          setPath(state.settings, a.key, a.value);
-          persist();
-          invalidate();
-          renderPanel();
-        };
-        row.appendChild(apply);
-      }
-      var hide = document.createElement('button');
-      hide.className = 'sl-btn';
-      hide.type = 'button';
-      hide.textContent = 'Dismiss';
-      hide.onclick = function () {
-        state.adviceDismissed[adviceId(a)] = true;
-        renderPanel();
-      };
-      row.appendChild(hide);
-      card.appendChild(row);
-      wrap.appendChild(card);
-    });
+    list.forEach(function (a) { wrap.appendChild(adviceCard(a)); });
 
     if (changes > 1) {
       var allRow = document.createElement('div');
@@ -395,6 +409,61 @@
       };
       allRow.appendChild(applyAll);
       wrap.appendChild(allRow);
+    }
+
+    body.appendChild(wrap);
+  }
+
+  /**
+   * The other direction: not what this file might do, but what the last one
+   * did. Somebody holding a part with strings on it does not want a list of
+   * settings, they want the two or three that cause strings — worked out from
+   * the profile in front of them, so the numbers are theirs and applying one
+   * is a button rather than a search.
+   */
+  function renderTroubleshooter(body) {
+    if (!window.OrcaAdvisor || !window.OrcaAdvisor.SYMPTOMS) return;
+
+    var wrap = document.createElement('details');
+    wrap.className = 'sl-section';
+    wrap.id = 'fix-box';
+    wrap.open = !!state.symptom;
+    var head = document.createElement('summary');
+    head.textContent = 'Something wrong with the last print?';
+    wrap.appendChild(head);
+
+    var picker = document.createElement('div');
+    picker.className = 'sl-symptoms';
+    window.OrcaAdvisor.SYMPTOMS.forEach(function (sym) {
+      var b = document.createElement('button');
+      b.className = 'sl-btn' + (state.symptom === sym.key ? ' primary' : '');
+      b.type = 'button';
+      b.setAttribute('data-symptom', sym.key);
+      b.title = sym.hint;
+      b.textContent = sym.label;
+      b.onclick = function () {
+        state.symptom = state.symptom === sym.key ? '' : sym.key;
+        renderPanel();
+      };
+      picker.appendChild(b);
+    });
+    wrap.appendChild(picker);
+
+    if (state.symptom) {
+      var chosen = window.OrcaAdvisor.SYMPTOMS.filter(function (x) {
+        return x.key === state.symptom;
+      })[0];
+      var fixes = window.OrcaAdvisor.remedies(state.symptom, state.settings);
+      var note = document.createElement('div');
+      note.className = 'sl-hint';
+      note.id = 'fix-note';
+      note.textContent = fixes.length
+        ? (chosen ? chosen.hint + '. ' : '') + 'Change one at a time and print again — ' +
+          'two at once and neither is answered.'
+        : 'Nothing in this profile is set the way that fault usually comes from. ' +
+          'It is worth looking at the machine itself.';
+      wrap.appendChild(note);
+      fixes.forEach(function (a) { wrap.appendChild(adviceCard(a)); });
     }
 
     body.appendChild(wrap);
@@ -1381,7 +1450,7 @@
     if (state.tab === 'check') { renderCheckTab(body); return; }
     if (state.tab === 'device') { renderDeviceTab(body); return; }
     if (state.tab === 'print' && presetsBelong() === 'panel') body.appendChild(state.presetsEl);
-    if (state.tab === 'print') renderAdvice(body);
+    if (state.tab === 'print') { renderAdvice(body); renderTroubleshooter(body); }
     var sections = state.tab === 'machine' ? MACHINE_SECTIONS : PRINT_SECTIONS;
 
     body.appendChild(renderSearch());
@@ -2325,8 +2394,40 @@
     state.viewer.models.forEach(function (m) { state.viewer.applyTransform(m); });
   }
 
+  /**
+   * The layer heights on offer follow the nozzle: 0.32 mm out of a 0.4 mm
+   * nozzle is a print that comes apart along the lines, and no vendor ships it.
+   * Refilled whenever the printer changes, keeping the chosen height if it
+   * still applies and falling back to the nearest one that does.
+   */
+  function fillQuality() {
+    var nozzle = state.settings.nozzle || 0.4;
+    var want = state.settings.qualityKey;
+    var offered = P.qualityFor(nozzle);
+    if (!offered[want]) {
+      // Nearest height the nozzle can lay, rather than an arbitrary default.
+      var here = (P.QUALITY[want] || {}).layerHeight || 0.2;
+      var best = null;
+      Object.keys(offered).forEach(function (k) {
+        if (!best || Math.abs(offered[k].layerHeight - here) <
+                     Math.abs(offered[best].layerHeight - here)) best = k;
+      });
+      if (best) want = best;
+      else offered = P.qualityFor(nozzle, want);
+    }
+    fillSelect(el('sel-quality'), offered, want);
+    return want;
+  }
+
   function onPresetChange() {
-    state.settings = P.buildSettings(el('sel-printer').value, el('sel-filament').value, el('sel-quality').value);
+    state.settings = P.buildSettings(el('sel-printer').value, el('sel-filament').value,
+      el('sel-quality').value);
+    // A change of printer can change the nozzle, and with it what heights are
+    // on offer; rebuild once more if the chosen one is no longer among them.
+    var quality = fillQuality();
+    if (quality !== state.settings.qualityKey) {
+      state.settings = P.buildSettings(el('sel-printer').value, el('sel-filament').value, quality);
+    }
     persist();
     applyBed();
     renderPanel();
@@ -3034,7 +3135,8 @@
 
     fillSelect(el('sel-printer'), P.PRINTERS, state.settings.printerKey);
     fillSelect(el('sel-filament'), P.FILAMENTS, state.settings.filamentKey);
-    fillSelect(el('sel-quality'), P.QUALITY, state.settings.qualityKey);
+    fillSelect(el('sel-quality'), P.qualityFor(state.settings.nozzle, state.settings.qualityKey),
+      state.settings.qualityKey);
     ['sel-printer', 'sel-filament', 'sel-quality'].forEach(function (id) {
       el(id).addEventListener('change', onPresetChange);
     });

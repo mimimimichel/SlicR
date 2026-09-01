@@ -17,6 +17,10 @@ function near(label, got, want, tol) {
     Math.abs(got - want) <= tol, 'off by ' + Math.abs(got - want).toFixed(3));
 }
 
+function get(o, path) {
+  return path.split('.').reduce(function (v, k) { return v == null ? v : v[k]; }, o);
+}
+
 // --- shapes ----------------------------------------------------------------
 
 function mesh() {
@@ -178,6 +182,113 @@ ok(all.length + ' proposals across the sweep, all naming a known setting',
 var unexplained = all.filter(function (a) { return !a.why || a.why.length < 20; });
 ok('and every one of them explains itself', unexplained.length === 0,
   JSON.stringify(unexplained.map(function (a) { return a.label; })));
+
+console.log('\n=== 7. the profile, before any model is loaded ===');
+// Every rule here is a ratio the printer cannot argue with, so the first thing
+// to hold it to is our own presets: if the shipped profiles trip these rules,
+// either the rule is wrong or the profile is.
+var swept = 0, tripped = {};
+Object.keys(P.PRINTERS).forEach(function (pk) {
+  Object.keys(P.FILAMENTS).forEach(function (fk) {
+    Object.keys(P.qualityFor(P.PRINTERS[pk].nozzle)).forEach(function (qk) {
+      var s = P.buildSettings(pk, fk, qk);
+      swept++;
+      A.review(s).forEach(function (a) {
+        (tripped[a.label] = tripped[a.label] || []).push(pk + '/' + fk + '/' + qk);
+      });
+    });
+  });
+});
+ok('every profile this app offers passes its own review (' + swept + ' of them)',
+  Object.keys(tripped).length === 0,
+  Object.keys(tripped).map(function (k) {
+    return k + ' ×' + tripped[k].length + ' e.g. ' + tripped[k][0];
+  }).join(' | '));
+
+// And each rule fires when it is broken, with a proposal that fixes it.
+function broken(over) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'q020');
+  for (var k in over) s[k] = over[k];
+  return s;
+}
+function fires(label, s, match) {
+  var hit = A.review(s).filter(function (a) { return match.test(a.label); })[0];
+  ok(label, !!hit, JSON.stringify(A.review(s).map(function (a) { return a.label; })));
+  return hit;
+}
+var thick = fires('a layer past three quarters of the nozzle is caught',
+  broken({ layerHeight: 0.34 }), /too thick/i);
+ok('and the height it proposes is one the nozzle can lay',
+  thick && thick.value <= 0.4 * 0.75 + 1e-9, thick && String(thick.value));
+var thinTop = fires('a roof under 0.8 mm is caught',
+  broken({ topLayers: 2 }), /on top/i);
+ok('and it proposes enough layers to get there',
+  thinTop && thinTop.value * 0.2 >= 0.8 - 1e-9, thinTop && String(thinTop.value));
+fires('a first layer thicker than the nozzle is caught',
+  broken({ firstLayerHeight: 0.45 }), /first layer/i);
+fires('lines narrower than the nozzle are caught',
+  broken({ lineWidth: 0.3 }), /narrower/i);
+fires('a single wall is caught', broken({ wallLoops: 1 }), /walls too thin/i);
+fires('solid tops over no infill are caught',
+  broken({ infillDensity: 0 }), /over nothing/i);
+fires('support printed onto the part is caught',
+  broken({ supportEnable: true, supportZGap: 0 }), /welded/i);
+fires('a speed the machine will not do is caught',
+  broken({ speeds: { infill: 900 } }), /past what the machine/i);
+ok('and a spiral vase is not told it has no roof',
+  A.review(broken({ spiralVase: true, topLayers: 0, infillDensity: 0 }))
+    .every(function (a) { return !/on top|over nothing/i.test(a.label); }));
+
+console.log('\n=== 8. what went wrong last time ===');
+var profile = P.buildSettings('artillery_x2', 'pla', 'q020');
+ok('there are faults to choose from', A.SYMPTOMS.length >= 10);
+var everyFix = [];
+A.SYMPTOMS.forEach(function (sym) {
+  var fixes = A.remedies(sym.key, profile);
+  everyFix = everyFix.concat(fixes);
+  ok('“' + sym.label + '” is answered (' + fixes.length + ')', fixes.length > 0,
+    'nothing proposed');
+});
+ok('an unknown fault proposes nothing', A.remedies('nonsense', profile).length === 0);
+ok('and no settings, nothing at all', A.remedies('stringing', null).length === 0);
+
+var strayKey = everyFix.filter(function (a) {
+  return a.key !== null && get(profile, a.key) === undefined;
+});
+ok(everyFix.length + ' remedies across every fault, all naming a real setting',
+  strayKey.length === 0, JSON.stringify(strayKey.map(function (a) { return a.key; })));
+var notANumber = everyFix.filter(function (a) {
+  return typeof a.value === 'number' && !isFinite(a.value);
+});
+ok('and none of them proposes a value that is not one', notANumber.length === 0,
+  JSON.stringify(notANumber.map(function (a) { return a.key; })));
+
+// Bounded: a troubleshooter that walks a setting off the end of its range over
+// a few prints is worse than none at all.
+var walked = P.buildSettings('artillery_x2', 'pla', 'q020');
+for (var round = 0; round < 12; round++) {
+  A.remedies('stringing', walked).forEach(function (a) {
+    if (a.key) walked[a.key] = a.value;
+  });
+}
+ok('twelve rounds of the stringing advice stays inside the sane range (' +
+   walked.retractLength + ' mm, ' + walked.nozzleTemp + ' °C)',
+  walked.retractLength <= 6 && walked.nozzleTemp >= 195 && walked.nozzleTemp <= 225,
+  walked.retractLength + '/' + walked.nozzleTemp);
+var hotter = P.buildSettings('artillery_x2', 'pla', 'q020');
+for (round = 0; round < 12; round++) {
+  A.remedies('weak', hotter).forEach(function (a) { if (a.key) hotter[a.key] = a.value; });
+}
+ok('and twelve rounds of the strength advice does too (' + hotter.nozzleTemp + ' °C, ' +
+   hotter.wallLoops + ' walls)',
+  hotter.nozzleTemp <= 225 && hotter.wallLoops <= 6, hotter.nozzleTemp + '/' + hotter.wallLoops);
+
+// The remedy has to know the machine it is talking about.
+var withK = A.remedies('blobs', P.buildSettings('artillery_x2', 'pla', 'q020'));
+var withoutK = A.remedies('blobs', P.buildSettings('artillery_x1', 'pla', 'q020'));
+ok('a machine already sending its linear advance is not told to set it',
+  withK.every(function (a) { return !/linear advance/i.test(a.label); }));
+ok('and one that has none is', withoutK.some(function (a) { return /linear advance/i.test(a.label); }));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
