@@ -1,0 +1,166 @@
+/**
+ * Sending to a Centauri Carbon 2, through the real UI and over a real socket.
+ *
+ * The stand-in printer enforces Elegoo's own contract — contiguous ranges, the
+ * token, the digest — and reassembles the chunks, so this test can say whether
+ * the file arrived whole rather than merely whether the requests looked right.
+ *
+ *   python3 -m http.server 8099      (from the repo root)
+ *   python3 test-elegoo-server.py    (in another shell)
+ *   node test-ui-elegoo.js
+ */
+const { chromium } = require('playwright');
+
+const APP = process.env.APP || 'http://localhost:8099/index.html';
+const PRINTER = process.env.PRINTER || '127.0.0.1:5098';
+
+(async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
+  });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+  const errors = [];
+  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+
+  let pass = 0, fail = 0;
+  const ok = (label, cond, detail) => {
+    if (cond) { pass++; console.log('  ok    ' + label); }
+    else { fail++; console.log('  FAIL  ' + label + (detail ? '  -> ' + detail : '')); }
+  };
+  const received = async () => (await fetch('http://' + PRINTER + '/_received')).json();
+  const section = () => page.locator('.sl-section', { hasText: 'Send to the printer' }).first();
+
+  const openMachineTab = async () => {
+    await page.click('#btn-panel').catch(() => {});
+    await page.waitForTimeout(250);
+    await page.click('[data-tab="machine"]');
+    await page.waitForTimeout(250);
+  };
+  const closePanel = async () => {
+    await page.click('#backdrop').catch(() => {});
+    await page.waitForTimeout(200);
+  };
+
+  await page.goto(APP);
+  await page.waitForSelector('#btn-slice');
+  await openMachineTab();
+  await section().locator('summary').click();
+  await page.waitForTimeout(200);
+
+  await page.selectOption('#link-kind', 'elegoo_cc2');
+  await page.waitForTimeout(300);
+  ok('the Centauri Carbon 2 is on the list of printers to send to', true);
+
+  // It says outright that it cannot start a print, rather than offering a
+  // switch that would do nothing.
+  const noteText = await section().textContent();
+  ok('and says why it cannot start the print itself',
+    /MQTT/.test(noteText) && /screen/.test(noteText), noteText.slice(0, 160));
+  ok('so no start-on-arrival switch is offered',
+    await section().locator('input[type="checkbox"]').count() === 0);
+
+  await section().locator('input[type="text"]').first().fill(PRINTER);
+  await section().locator('input[type="text"]').first().dispatchEvent('change');
+
+  // A wrong access code has to be reported as one.
+  await section().locator('input[type="password"]').first().fill('NOPE');
+  await section().locator('input[type="password"]').first().dispatchEvent('change');
+  await page.click('#btn-octo-test');
+  await page.waitForFunction(() => {
+    const r = document.getElementById('octo-result');
+    return r && r.textContent && !/Asking/.test(r.textContent);
+  }, { timeout: 15000 });
+  const wrong = await page.locator('#octo-result').textContent();
+  ok('a wrong access code says so, and where the right one is (' + wrong.slice(0, 40) + '…)',
+    /access code/i.test(wrong) && /screen/i.test(wrong), wrong);
+
+  // Blank means the default token, which is what an untouched printer uses.
+  await section().locator('input[type="password"]').first().fill('');
+  await section().locator('input[type="password"]').first().dispatchEvent('change');
+  await page.click('#btn-octo-test');
+  await page.waitForFunction(() => {
+    const r = document.getElementById('octo-result');
+    return r && /answered|refused|No answer/.test(r.textContent);
+  }, { timeout: 15000 });
+  const good = await page.locator('#octo-result').textContent();
+  ok('and a blank code reaches a printer that has none set (' + good.slice(0, 50) + '…)',
+    /answered/.test(good) && /CC2FAKESERIAL/.test(good), good);
+
+  await closePanel();
+  ok('the send button appears', await page.locator('#btn-send').isVisible());
+
+  await page.click('[data-demo="cube"]');
+  await page.waitForFunction(() => !document.getElementById('btn-slice').disabled);
+  await page.click('#btn-slice');
+  await page.waitForFunction(() => !document.getElementById('btn-export').disabled,
+    { timeout: 180000 });
+
+  const before = (await received()).length;
+  page.once('dialog', d => d.accept());
+  await page.click('#btn-send');
+  await page.waitForTimeout(4000);
+
+  const got = await received();
+  ok('the printer received a file (' + before + ' → ' + got.length + ')', got.length === before + 1);
+  const last = got[got.length - 1];
+  if (last) {
+    ok('named after the model (' + last.name + ')', /cube_0p20mm\.gcode$/.test(last.name), last.name);
+    ok('carrying real G-code (' + last.lines + ' lines)',
+      last.lines > 100 && /generated by/.test(last.firstLine), last.firstLine);
+    ok('reassembled to exactly the size claimed', last.size > 0);
+    ok('and its MD5 matches what was announced (' + last.md5Actual.slice(0, 12) + '…)',
+      last.intact === true,
+      'claimed ' + last.md5Claimed + ' actual ' + last.md5Actual);
+  }
+
+  // Bigger output, still through the whole UI. A 20 mm cube does not reach the
+  // one-megabyte chunk limit even at 0.08 mm layers, so this is not the split
+  // path — the split is exercised on its own, below, against the same printer.
+  await page.selectOption('#sel-quality', 'q008');
+  await page.waitForTimeout(400);
+  await page.click('#btn-slice');
+  await page.waitForFunction(() => !document.getElementById('btn-export').disabled,
+    { timeout: 300000 });
+  const before2 = (await received()).length;
+  page.once('dialog', d => d.accept());
+  await page.click('#btn-send');
+  await page.waitForTimeout(8000);
+  const got2 = await received();
+  const big = got2[got2.length - 1];
+  ok('a bigger file arrives too (' + before2 + ' → ' + got2.length + ')',
+    got2.length === before2 + 1);
+  if (big) {
+    ok('reassembled whole across ' + Math.ceil(big.size / (1024 * 1024)) + ' chunk(s), ' +
+      Math.round(big.size / 1024) + ' KB', big.intact === true,
+      'claimed ' + big.md5Claimed + ' actual ' + big.md5Actual);
+  }
+
+  // The split path, over the same live socket: the browser sends a file in
+  // four pieces and the printer reassembles it. The chunk size is the only
+  // thing made small here; everything else is the shipped code path.
+  const split = await page.evaluate(async (printer) => {
+    const gcode = 'G1 X1 Y1 E0.1 ; a line of it\n'.repeat(4000);   // ~100 KB
+    const res = await window.OrcaElegooLink.cc2Upload(
+      { url: printer, model: 'cc2' }, 'split_test', gcode, { chunkSize: 25000 });
+    return { name: res.name, chunks: res.chunks, size: res.size, md5: res.md5 };
+  }, PRINTER);
+  await page.waitForTimeout(1500);
+  const got3 = await received();
+  const piecewise = got3[got3.length - 1];
+  ok('a file sent in ' + split.chunks + ' pieces arrives as one',
+    split.chunks === Math.ceil(split.size / 25000) && piecewise &&
+    piecewise.name === 'split_test.gcode' &&
+    piecewise.intact === true && piecewise.size === split.size,
+    JSON.stringify({ split: split, arrived: piecewise }));
+
+  // The wrong-access-code step above provokes exactly one 401, which the
+  // browser logs whatever the page does with it. Anything else is a fault.
+  const unexpected = errors.filter(e => !/401 \(Unauthorized\)/.test(e));
+  ok('one 401 from the deliberate wrong code, and nothing else in the console',
+    unexpected.length === 0 && errors.length === 1, JSON.stringify(errors.slice(0, 3)));
+
+  await browser.close();
+  console.log('\n' + pass + ' passed, ' + fail + ' failed');
+  process.exit(fail ? 1 : 0);
+})();

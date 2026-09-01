@@ -37,7 +37,8 @@
     shape: null,
     shapeKey: '',
     adviceDismissed: {},
-    octo: { url: '', key: '', autoStart: false },
+    // Where a finished file gets sent, if anywhere. One connection, one kind.
+    link: { kind: 'none', url: '', key: '', autoStart: false },
     sending: false
   };
 
@@ -422,36 +423,97 @@
     return input;
   }
 
-  function renderOctoPrint(body) {
+  var LINK_KINDS = [
+    ['none', 'Not connected'],
+    ['octoprint', 'OctoPrint'],
+    ['elegoo_cc2', 'Elegoo Centauri Carbon 2'],
+    ['elegoo_cc1', 'Elegoo Centauri Carbon']
+  ];
+
+  function isElegoo(kind) { return kind === 'elegoo_cc2' || kind === 'elegoo_cc1'; }
+
+  function linkName(kind) {
+    for (var i = 0; i < LINK_KINDS.length; i++) if (LINK_KINDS[i][0] === kind) return LINK_KINDS[i][1];
+    return 'the printer';
+  }
+
+  /** Enough entered to try. OctoPrint needs a key; the Elegoos do not. */
+  function linkReady() {
+    if (state.link.kind === 'none' || !state.link.url) return false;
+    if (state.link.kind === 'octoprint') return !!state.link.key;
+    return true;
+  }
+
+  /** Whether this machine can be told to start printing from here at all. */
+  function linkCanStart() {
+    if (state.link.kind === 'octoprint') return true;
+    if (state.link.kind === 'elegoo_cc1') return true;
+    return false;   // the CC2 takes commands over MQTT, which no browser speaks
+  }
+
+  function renderPrinterLink(body) {
     var details = document.createElement('details');
     details.className = 'sl-section';
-    if (state.octo.url) details.open = true;
+    if (state.link.kind !== 'none') details.open = true;
     var summary = document.createElement('summary');
-    summary.textContent = 'OctoPrint';
+    summary.textContent = 'Send to the printer';
     details.appendChild(summary);
 
-    details.appendChild(octoRow('Address', 'Host name or IP, with a port if it uses one',
-      octoInput('text', 'octopi.local  or  192.168.1.42:5000', state.octo.url, function (v) {
-        state.octo.url = v; saveOcto(); updateSendButton();
-      })));
+    var kindSel = document.createElement('select');
+    kindSel.className = 'sl-select';
+    kindSel.id = 'link-kind';
+    LINK_KINDS.forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k[0];
+      o.textContent = k[1];
+      if (state.link.kind === k[0]) o.selected = true;
+      kindSel.appendChild(o);
+    });
+    kindSel.onchange = function () {
+      state.link.kind = kindSel.value;
+      saveLink();
+      updateSendButton();
+      renderPanel();
+    };
+    details.appendChild(octoRow('Printer', 'What is at the other end', kindSel));
 
-    details.appendChild(octoRow('API key',
-      'OctoPrint → Settings → API. Kept on this device, sent to that printer only',
-      octoInput('password', 'API key', state.octo.key, function (v) {
-        state.octo.key = v; saveOcto(); updateSendButton();
-      })));
+    if (state.link.kind === 'none') { body.appendChild(details); return; }
 
-    var sw = document.createElement('span');
-    sw.className = 'sl-switch';
-    var cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = !!state.octo.autoStart;
-    cb.setAttribute('aria-label', 'Start printing on arrival');
-    cb.onchange = function () { state.octo.autoStart = cb.checked; saveOcto(); updateSendButton(); };
-    sw.appendChild(cb);
-    sw.appendChild(document.createElement('i'));
-    details.appendChild(octoRow('Start printing on arrival',
-      'Off, the file is uploaded and selected and you press print at the machine', sw));
+    var isOcto = state.link.kind === 'octoprint';
+    details.appendChild(octoRow('Address',
+      isOcto ? 'Host name or IP, with a port if it uses one' : 'The printer\'s IP on your network',
+      octoInput('text', isOcto ? 'octopi.local  or  192.168.1.42:5000' : '192.168.1.42',
+        state.link.url, function (v) {
+          state.link.url = v; saveLink(); updateSendButton();
+        })));
+
+    details.appendChild(octoRow(isOcto ? 'API key' : 'Access code',
+      isOcto ? 'OctoPrint → Settings → API. Kept on this device, sent to that printer only'
+             : 'Only if the printer asks for one — it is on its own screen. Blank uses the default',
+      octoInput('password', isOcto ? 'API key' : 'blank unless set',
+        state.link.key, function (v) {
+          state.link.key = v; saveLink(); updateSendButton();
+        })));
+
+    if (linkCanStart()) {
+      var sw = document.createElement('span');
+      sw.className = 'sl-switch';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!state.link.autoStart;
+      cb.setAttribute('aria-label', 'Start printing on arrival');
+      cb.onchange = function () { state.link.autoStart = cb.checked; saveLink(); updateSendButton(); };
+      sw.appendChild(cb);
+      sw.appendChild(document.createElement('i'));
+      details.appendChild(octoRow('Start printing on arrival',
+        'Off, the file is uploaded and you press print at the machine', sw));
+    } else {
+      var note = document.createElement('div');
+      note.className = 'sl-hint';
+      note.textContent = 'This machine only takes print commands over MQTT, which a browser ' +
+        'cannot speak. The file goes up; you start it from the printer\'s screen.';
+      details.appendChild(note);
+    }
 
     var row = document.createElement('div');
     row.className = 'sl-row';
@@ -464,12 +526,16 @@
     result.className = 'sl-hint';
     result.id = 'octo-result';
     testBtn.onclick = function () {
-      if (!window.OrcaOctoPrint) { result.textContent = 'The OctoPrint client did not load.'; return; }
+      var client = linkClient();
+      if (!client) { result.textContent = 'That printer\'s code did not load.'; return; }
       testBtn.disabled = true;
-      result.textContent = 'Asking ' + window.OrcaOctoPrint.normaliseUrl(state.octo.url) + '…';
-      window.OrcaOctoPrint.test(state.octo).then(function (info) {
+      result.textContent = 'Asking ' + state.link.url + '…';
+      client.test(linkConfig()).then(function (info) {
         testBtn.disabled = false;
-        result.textContent = 'OctoPrint ' + info.server + ' answered. The printer says: ' + info.state + '.';
+        result.textContent = isOcto
+          ? 'OctoPrint ' + info.server + ' answered. The printer says: ' + info.state + '.'
+          : (info.name || 'The printer') + ' answered' +
+            (info.serial ? ', serial ' + info.serial : '') + '.';
       }, function (err) {
         testBtn.disabled = false;
         result.textContent = err.message;
@@ -482,25 +548,42 @@
     body.appendChild(details);
   }
 
+  function linkClient() {
+    if (state.link.kind === 'octoprint') return window.OrcaOctoPrint || null;
+    if (isElegoo(state.link.kind)) return window.OrcaElegooLink || null;
+    return null;
+  }
+
+  /** The connection as the client for this kind of printer wants it. */
+  function linkConfig() {
+    return {
+      url: state.link.url,
+      key: state.link.key,
+      model: state.link.kind === 'elegoo_cc1' ? 'cc1' : 'cc2'
+    };
+  }
+
   function updateSendButton() {
     var btn = el('btn-send');
     if (!btn) return;
-    var configured = !!(state.octo.url && state.octo.key);
-    btn.hidden = !configured;
-    btn.disabled = !configured || !state.result || state.sending || state.slicing;
-    btn.title = state.octo.autoStart ? 'Send to OctoPrint and start printing' : 'Send to OctoPrint';
+    btn.hidden = !linkReady();
+    btn.disabled = !linkReady() || !state.result || state.sending || state.slicing;
+    btn.title = (state.link.autoStart && linkCanStart())
+      ? 'Send to ' + linkName(state.link.kind) + ' and start printing'
+      : 'Send to ' + linkName(state.link.kind);
   }
 
   /**
    * Upload what was just sliced. The same safety check that guards the download
    * guards this, and for the same reason: these are the exact bytes the machine
-   * will run. Starting the print happens only when it has been asked for in the
-   * settings, and is confirmed even then — nobody should discover that their
-   * printer started because they pressed an upload button.
+   * will run. Starting the print happens only where the machine allows it, only
+   * when it has been asked for, and is confirmed even then — nobody should
+   * discover that their printer started because they pressed an upload button.
    */
-  function sendToOctoPrint() {
+  function sendToPrinter() {
     if (!state.result || state.sending) return;
-    if (!window.OrcaOctoPrint) { alert('The OctoPrint client did not load.'); return; }
+    var client = linkClient();
+    if (!client) { alert('That printer\'s code did not load.'); return; }
 
     var gcode = withThumbnail(state.result.gcode);
     var report = window.OrcaGcodeCheck
@@ -510,7 +593,7 @@
     updateCheckStatus();
     if (report.errors > 0 && !state.safetyOverride) { openPanel('check'); return; }
 
-    var start = !!state.octo.autoStart;
+    var start = !!state.link.autoStart && linkCanStart();
     if (start && !window.confirm(
       'This uploads the file and starts printing it straight away.\n\n' +
       'The machine will heat up and move whether or not anyone is beside it. Continue?')) return;
@@ -521,7 +604,7 @@
 
     state.sending = true;
     updateSendButton();
-    showProgress(start ? 'Sending and starting' : 'Sending to OctoPrint', 0.5);
+    showProgress(start ? 'Sending and starting' : 'Sending to ' + linkName(state.link.kind), 0.5);
 
     function finished(ok, message) {
       hideProgress();
@@ -529,26 +612,46 @@
       updateSendButton();
       state.lastSend = (ok ? '' : 'error: ') + message;
       if (ok && window.AndroidSlicer) window.AndroidSlicer.toast(message);
-      else alert(ok ? message : 'OctoPrint\n\n' + message);
+      else alert(ok ? message : linkName(state.link.kind) + '\n\n' + message);
     }
 
     // In the app the page cannot reach the network at all — it is served from
     // an https origin and the printer is on http, which no setting here can
     // undo. The app makes that one request instead, over the same streaming
     // path the file save uses.
-    if (window.AndroidSlicer && window.AndroidSlicer.octoSend) {
+    if (window.AndroidSlicer && window.AndroidSlicer.octoSend && state.link.kind === 'octoprint') {
       window.OrcaOctoResult = function (ok, message) { finished(!!ok, String(message || '')); };
       if (!streamToAndroid(window.OrcaOctoPrint.fileName(file), gcode, finished)) return;
-      window.AndroidSlicer.octoSend(state.octo.url, state.octo.key, start);
+      window.AndroidSlicer.octoSend(state.link.url, state.link.key, start);
       return;
     }
 
-    window.OrcaOctoPrint.upload(state.octo, file, gcode, { print: start, select: true })
-      .then(function (res) {
+    var cfg = linkConfig();
+    var upload = state.link.kind === 'octoprint'
+      ? client.upload(cfg, file, gcode, { print: start, select: true })
+      : client.upload(cfg, file, gcode, {
+          onProgress: function (fraction) {
+            showProgress('Sending to ' + linkName(state.link.kind), 0.1 + fraction * 0.8);
+          }
+        });
+
+    upload.then(function (res) {
+      if (state.link.kind === 'octoprint') {
         finished(true, res.started
           ? res.name + ' is uploaded and printing.'
           : res.name + ' is on the printer and selected. Press print at the machine.');
-      }, function (err) { finished(false, err.message); });
+        return;
+      }
+      if (!start) {
+        finished(true, res.name + ' is on the printer. Start it from the screen.');
+        return;
+      }
+      return client.startPrint(cfg, res.name).then(function () {
+        finished(true, res.name + ' is uploaded and printing.');
+      }, function (err) {
+        finished(false, 'The file arrived, but the printer would not start it.\n\n' + err.message);
+      });
+    }, function (err) { finished(false, err.message); });
   }
 
   function renderPanel() {
@@ -590,7 +693,7 @@
       return;
     }
 
-    if (state.tab === 'machine') renderOctoPrint(body);
+    if (state.tab === 'machine') renderPrinterLink(body);
 
     sections.forEach(function (section) {
       var details = document.createElement('details');
@@ -1354,18 +1457,21 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings)); } catch (e) { /* private mode */ }
   }
 
-  function saveOcto() {
-    try { localStorage.setItem(OCTO_KEY, JSON.stringify(state.octo)); } catch (e) { /* private mode */ }
+  function saveLink() {
+    try { localStorage.setItem(OCTO_KEY, JSON.stringify(state.link)); } catch (e) { /* private mode */ }
   }
 
-  function loadOcto() {
+  function loadLink() {
     try {
       var raw = localStorage.getItem(OCTO_KEY);
       if (!raw) return;
       var o = JSON.parse(raw) || {};
-      state.octo.url = typeof o.url === 'string' ? o.url : '';
-      state.octo.key = typeof o.key === 'string' ? o.key : '';
-      state.octo.autoStart = !!o.autoStart;
+      state.link.url = typeof o.url === 'string' ? o.url : '';
+      state.link.key = typeof o.key === 'string' ? o.key : '';
+      state.link.autoStart = !!o.autoStart;
+      // Settings saved before there was more than one kind of printer to send
+      // to: an address and a key could only have meant OctoPrint.
+      state.link.kind = o.kind || (o.url && o.key ? 'octoprint' : 'none');
     } catch (e) { /* leave it empty */ }
   }
 
@@ -1858,7 +1964,7 @@
 
     state.presetsEl = el('presets');
     state.settings = restore() || P.buildSettings('centauri_carbon', 'pla', 'q020');
-    loadOcto();
+    loadLink();
 
     state.viewer = new window.OrcaViewer(el('sl-canvas'), {
       onSelect: function () { if (state.tab === 'object') renderPanel(); },
@@ -1896,7 +2002,7 @@
 
     el('btn-slice').onclick = slice;
     el('btn-export').onclick = exportGcode;
-    el('btn-send').onclick = sendToOctoPrint;
+    el('btn-send').onclick = sendToPrinter;
     el('btn-panel').onclick = function () {
       if (el('panel').classList.contains('open')) closePanel(); else openPanel();
     };

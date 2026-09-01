@@ -50,10 +50,12 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
     await page.locator('#btn-send').isHidden());
 
   await openMachineTab();
-  const section = page.locator('.sl-section', { hasText: 'OctoPrint' }).first();
-  ok('the Machine tab has an OctoPrint section', await section.count() === 1);
+  const section = page.locator('.sl-section', { hasText: 'Send to the printer' }).first();
+  ok('the Machine tab has a send section', await section.count() === 1);
   await section.locator('summary').click();
   await page.waitForTimeout(200);
+  await page.selectOption('#link-kind', 'octoprint');
+  await page.waitForTimeout(300);
 
   await section.locator('input[type="text"]').first().fill(OCTO);
   await section.locator('input[type="text"]').first().dispatchEvent('change');
@@ -117,7 +119,7 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
 
   // Now ask for it to print, and confirm the warning it puts up first.
   await openMachineTab();
-  await page.locator('.sl-section', { hasText: 'OctoPrint' }).first()
+  await page.locator('.sl-section', { hasText: 'Send to the printer' }).first()
     .locator('input[type="checkbox"]').first().check({ force: true });
   await page.waitForTimeout(200);
   await closePanel();
@@ -152,7 +154,7 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
   await page.selectOption('#sel-printer', 'prusa_mini');
   await page.waitForTimeout(400);
   await openMachineTab();
-  const kept = await page.locator('.sl-section', { hasText: 'OctoPrint' }).first()
+  const kept = await page.locator('.sl-section', { hasText: 'Send to the printer' }).first()
     .locator('input[type="text"]').first().inputValue();
   ok('the address survives changing the printer profile (' + kept + ')', kept === OCTO);
 
