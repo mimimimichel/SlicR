@@ -3675,7 +3675,8 @@
 
         // Arcs need a constant width and a flat layer, so variable-width beads
         // and the vase spiral keep their straight segments.
-        if (s.arcFitting && flavor.supportsArcs && !f.widths && !vase && pts.length >= 6) {
+        if (s.arcFitting && flavor.supportsArcs && s.machineArcs !== false &&
+            !f.widths && !vase && pts.length >= 6) {
           var fitted = fitArcs(pts, s.arcTolerance);
           for (var mi = 0; mi < fitted.length; mi++) {
             var mv = fitted[mi];

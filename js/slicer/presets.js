@@ -23,7 +23,11 @@
     },
     klipper: {
       name: 'Klipper',
-      acceleration: function (a) { return 'SET_VELOCITY_LIMIT ACCEL=' + Math.round(a); },
+      // Klipper answers M204 as well as SET_VELOCITY_LIMIT, and M204 is what
+      // these machines' own vendor scripts use — Elegoo call it inside their
+      // start G-code. A firmware that has trimmed the extended command still
+      // takes this one.
+      acceleration: function (a) { return 'M204 S' + Math.round(a); },
       fan: function (pwm) { return pwm > 0 ? 'M106 S' + pwm : 'M107'; },
       supportsArcs: true
     },
@@ -417,7 +421,12 @@
       'M83 ; the retract below is a distance',
       'G92 E0',
       'G1 E-1.5 F1800 ; retract',
-      'G2 I0 J1 Z{max_z + 0.5} F3000 ; curl away from the part',
+      // Elegoo write this lift as a full circle of radius 1 — a G2 with no
+      // endpoint, which finishes where it started, one layer higher. This
+      // machine is sent no arcs anywhere else, and an end script that stops on
+      // an unknown command leaves the heaters running, so it is the same lift
+      // without the curl.
+      'G1 Z{max_z + 0.5} F3000 ; up off the part',
       'M106 S0 ; part fan off',
       'M106 P2 S0 ; auxiliary fan off',
       'G90',
@@ -432,7 +441,9 @@
       'M83 ; the retract below is a distance',
       'G92 E0',
       'G1 E-1.5 F1800 ; retract',
-      'G2 I1 J0 Z{max_z + 0.5} F3000 ; curl away from the part',
+      // The same lift as Elegoo's, without the arc: this machine is not sent
+      // one anywhere else either.
+      'G1 Z{max_z + 0.5} F3000 ; up off the part',
       'G90',
       'G1 X10 Y{present_y} Z{min(max_z + 50, bed_z)} E-5 F{z_feed} ; present the print',
       'M106 S0 ; fan off',
@@ -584,6 +595,10 @@
       nozzle: opts.nozzle || 0.4,
       filamentDiameter: opts.filamentDiameter || 1.75,
       flavor: opts.flavor || 'marlin',
+      // Whether this machine's firmware takes G2/G3 at all. A machine whose
+      // own vendor never sends it does not get it from here either, however
+      // the arc-fitting switch is set.
+      arcs: opts.arcs !== false,
       maxAccel: opts.accel || 3000,
       travelSpeed: opts.travel || 200,
       retractLength: opts.retract != null ? opts.retract : 0.8,
@@ -637,7 +652,8 @@
         // the bed out to Y264.5 to present the print.
         reach: [-2, -3, 256, 266],
         // The screen's layer counter reads this, not the ;LAYER comments.
-        layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
+        layerGcode: 'SET_PRINT_STATS_INFO TOTAL_LAYER={total_layers}' +
+          ' CURRENT_LAYER={layer_num + 1}',
         maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
     // The second machine of the name, and not the same one: it probes on every
     // print instead of wiping and reloading a stored mesh, and it parks
@@ -646,13 +662,21 @@
       { kinematics: 'corexy', accel: 20000, travel: 500, retract: 0.8, retractSpeed: 30,
         flavor: 'klipper', start: 'centauri2', end: 'centauri2',
         reach: [-2, -3, 256, 266],
-        layerGcode: 'SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}',
+        // Both parameters, the way Elegoo's own layer script sends them.
+        layerGcode: 'SET_PRINT_STATS_INFO TOTAL_LAYER={total_layers}' +
+          ' CURRENT_LAYER={layer_num + 1}',
+        // Elegoo turn arc fitting off for this machine by name, and for the
+        // Centauri 2 and the Neptunes, while leaving it on everywhere else in
+        // their catalogue. Whatever the reason, the machine is not to be sent
+        // a G2 or a G3.
+        arcs: false,
         zHop: 0.4, maxSpeed: 500, maxNozzleTemp: 320, maxBedTemp: 110, maxZSpeed: 20 }),
+    // Elegoo turn arc fitting off for the Neptune line too, by name.
     elegoo_neptune4: printer('Elegoo Neptune 4 / Pro', 'Elegoo', 230, 230, 265,
-      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper',
+      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper', arcs: false,
         start: 'neptune4', end: 'neptune4' }),
     elegoo_neptune4_plus: printer('Elegoo Neptune 4 Plus', 'Elegoo', 325, 325, 385,
-      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper',
+      { accel: 4000, travel: 250, retract: 1.0, flavor: 'klipper', arcs: false,
         start: 'neptune4', end: 'neptune4' }),
 
     // --- Bambu Lab ---
@@ -902,6 +926,7 @@
       nozzle: p.nozzle,
       filamentDiameter: p.filamentDiameter,
       gcodeFlavor: p.flavor,
+      machineArcs: p.arcs !== false,
       maxAccel: p.maxAccel,
       maxSpeed: p.maxSpeed,
       travelSpeed: p.travelSpeed,
@@ -995,7 +1020,13 @@
       internalBridges: true,
       internalBridgeFlow: 1.0,
       // Replace runs of tiny segments on a curve with a single G2/G3.
-      arcFitting: true,
+      //
+      // Off, because that is how these machines are shipped: of the 797 vendor
+      // process profiles in OrcaSlicer, 629 turn arc fitting off. G2/G3 is
+      // optional in both worlds — a compile-time flag in Marlin, the
+      // [gcode_arcs] section in Klipper — and a printer without it does not
+      // ignore the command, it stops the print where it stands.
+      arcFitting: false,
       arcTolerance: 0.05,
 
       // --- Infill ---

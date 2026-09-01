@@ -27,7 +27,7 @@
     </span>
 
     <button class="sl-btn" id="btn-open" type="button" title="Open a model — STL, 3MF or OBJ">📂 <span class="full">Open</span></button>
-    <input type="file" id="file-input" accept=".stl,.3mf,.obj,model/stl,model/3mf" multiple hidden/>
+    <input type="file" id="file-input" accept=".stl,.3mf,.obj,.gcode,.gco,.g,model/stl,model/3mf,text/x-gcode" multiple hidden/>
     <input type="file" id="profile-input" accept=".json,application/json" hidden/>
 
     <div class="sl-spacer"></div>
@@ -100,7 +100,8 @@
 
     <div class="sl-empty" id="empty">
       <h2>Drop a model to start</h2>
-      <p>STL, 3MF or OBJ — everything is sliced locally in your browser. Nothing is uploaded.</p>
+      <p>STL, 3MF or OBJ — everything is sliced locally in your browser. Nothing is uploaded.<br/>
+      Open a <b>.gcode</b> file instead and it is drawn exactly as the printer will run it.</p>
       <div class="sl-empty-actions">
         <button class="sl-btn primary" id="btn-open2" type="button">Choose a file</button>
       </div>
@@ -169,6 +170,7 @@
 <script src="js/vendor/three.min.js"></script>
 <script src="js/slicer/presets.js"></script>
 <script src="js/slicer/gcodecheck.js"></script>
+<script src="js/slicer/gcodeview.js"></script>
 <script src="js/slicer/advisor.js"></script>
 <script src="js/slicer/md5.js"></script>
 <script src="js/slicer/octoprint.js"></script>

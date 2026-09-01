@@ -1365,6 +1365,8 @@
       body.appendChild(row);
     }
 
+    renderReadBack(body);
+
     var order = { error: 0, warning: 1, info: 2 };
     var findings = report.findings.slice().sort(function (a, b) {
       return (order[a.severity] - order[b.severity]) || (a.line - b.line);
@@ -1405,6 +1407,66 @@
       }
       body.appendChild(card);
     });
+  }
+
+  /**
+   * What came back out of the file. This is the same reading the preview is
+   * drawn from, written out in numbers: how many layers a printer would find,
+   * how much filament they add up to, and how far across the plate they go.
+   * If this section disagrees with the estimate above it, the file is not what
+   * the slicer thinks it is.
+   */
+  function renderReadBack(body) {
+    var read = state.result && state.result.read;
+    var box = document.createElement('div');
+    box.className = 'sl-readback';
+    box.id = 'readback';
+
+    var head = document.createElement('b');
+    head.textContent = 'Read back from the file';
+    box.appendChild(head);
+
+    if (!read || !read.segments) {
+      box.classList.add('empty');
+      var none = document.createElement('div');
+      none.textContent = read
+        ? 'No extrusion moves at all. A printer given this file would run the start script and then stop with nothing to print.'
+        : 'The G-code could not be read back.';
+      box.appendChild(none);
+      body.appendChild(box);
+      return;
+    }
+
+    var b = read.bounds;
+    var rows = [
+      [read.layers.toLocaleString(), 'layers'],
+      [read.segments.toLocaleString(), 'extrusion moves'],
+      [Math.round(read.filamentMm) + ' mm', 'filament, priming included'],
+      [read.maxZ.toFixed(2) + ' mm', 'tallest point'],
+      [Math.round(b.minX) + '–' + Math.round(b.maxX) + ' × ' +
+        Math.round(b.minY) + '–' + Math.round(b.maxY) + ' mm', 'across the plate']
+    ];
+    var list = document.createElement('div');
+    list.className = 'sl-readback-rows';
+    rows.forEach(function (r) {
+      var row = document.createElement('div');
+      var v = document.createElement('b');
+      v.textContent = r[0];
+      var k = document.createElement('span');
+      k.textContent = r[1];
+      row.appendChild(v);
+      row.appendChild(k);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+
+    var note = document.createElement('div');
+    note.className = 'why';
+    note.textContent = state.result.readTruncated
+      ? 'The file is longer than the viewer reads; the preview shows the first part of it.'
+      : 'The preview above is drawn from these moves, not from the model — what you see is what is in the file.';
+    box.appendChild(note);
+    body.appendChild(box);
   }
 
   function updateCheckStatus() {
@@ -1926,6 +1988,18 @@
   // ---------------------------------------------------------------------------
 
   async function loadFiles(files) {
+    // A .gcode file is not a model: it is already the answer, and what it
+    // wants is to be looked at. Opening one shows it in the viewer exactly as
+    // it will be printed, which is the only way to check a file the machine
+    // has already refused.
+    var models = [];
+    for (var g = 0; g < files.length; g++) {
+      if (/\.(gcode|gco|g|ngc)$/i.test(files[g].name)) await openGcodeFile(files[g]);
+      else models.push(files[g]);
+    }
+    if (!models.length) return;
+    files = models;
+
     for (var i = 0; i < files.length; i++) {
       var file = files[i];
       try {
@@ -1947,6 +2021,91 @@
     state.viewer.frameObjects();
     invalidate();
     renderPanel();
+  }
+
+  /**
+   * Open a G-code file and show what is in it. Nothing is sliced: the text is
+   * read the way a printer reads it, drawn from those moves, and put through
+   * the same safety check as a file this app generated. A file that turns out
+   * to hold nothing shows as nothing.
+   */
+  async function openGcodeFile(file) {
+    if (!window.OrcaGcodeView) { alert('The G-code reader did not load.'); return; }
+    try {
+      showProgress('Reading ' + file.name, 0.4);
+      var text = await file.text();
+      var read = window.OrcaGcodeView.parse(text, {
+        filamentDiameter: state.settings.filamentDiameter
+      });
+      var report = window.OrcaGcodeCheck
+        ? window.OrcaGcodeCheck.verify(text, state.settings) : null;
+
+      state.result = {
+        external: true, name: file.name,
+        layers: read.layers, gcode: text, report: report,
+        read: read.stats, readTruncated: read.truncated,
+        stats: null, bounds: null
+      };
+      state.safetyOverride = false;
+      hideProgress();
+
+      state.viewer.buildPreview(read.layers, state.showTravels);
+      setPreview(true);
+      var range = el('layer-range');
+      range.max = Math.max(0, read.layers.length - 1);
+      range.value = range.max;
+      updateLayerLabel();
+      renderExternalStats(read.stats);
+      renderLegend();
+      updateCheckStatus();
+      applyExportGate();
+      el('btn-export').disabled = false;
+      updateSendButton();
+      el('tool-preview').disabled = false;
+      refreshEmpty();
+      state.viewer.frameObjects();
+      renderPanel();
+
+      if (!read.stats.segments) {
+        openPanel('check');
+        alert(file.name + ' contains no extrusion moves at all.\n\n' +
+          'A printer given this file would run the start script — heating, homing, ' +
+          'levelling — and then stop with nothing to print.');
+      }
+    } catch (err) {
+      hideProgress();
+      alert('Could not read ' + file.name + '\n\n' + (err.message || err));
+    }
+  }
+
+  /** The numbers for a file that was opened rather than sliced here. */
+  function renderExternalStats(read) {
+    var box = el('stats');
+    box.innerHTML = '';
+    var grams = null;
+    if (state.settings.filamentDiameter && state.settings.filamentDensity) {
+      var area = Math.PI * Math.pow(state.settings.filamentDiameter / 2, 2);
+      grams = read.filamentMm * area / 1000 * state.settings.filamentDensity;
+    }
+    var items = [
+      [String(read.layers), 'Layers'],
+      [(read.filamentMm / 1000).toFixed(2) + ' m', 'Filament'],
+      [grams != null ? grams.toFixed(1) + ' g' : '—', 'Weight'],
+      [read.maxZ.toFixed(1) + ' mm', 'Height'],
+      [read.segments.toLocaleString(), 'Moves']
+    ];
+    items.forEach(function (it) {
+      var d = document.createElement('div');
+      d.className = 'sl-stat';
+      var b = document.createElement('b');
+      b.textContent = it[0];
+      var s = document.createElement('span');
+      s.textContent = it[1];
+      d.appendChild(b);
+      d.appendChild(s);
+      box.appendChild(d);
+    });
+    box.classList.add('show');
   }
 
   // Small procedurally generated models, handy when you have no files at hand
@@ -2139,6 +2298,12 @@
     updateSendButton();
     el('tool-preview').disabled = false;
 
+    // What is drawn is the file, not the model that produced it. If the
+    // G-code came out empty, short or in the wrong units, the screen has to
+    // show that rather than a perfect part that only exists in memory.
+    var read = readBack(msg.gcode);
+    if (read) { msg.layers = read.layers; msg.read = read.stats; msg.readTruncated = read.truncated; }
+
     state.viewer.buildPreview(msg.layers, state.showTravels);
     setPreview(true);
 
@@ -2157,6 +2322,23 @@
     if (msg.report && msg.report.errors > 0) openPanel('check');
   }
 
+  /**
+   * Read the finished G-code back the way a printer does, and hand the viewer
+   * what the file actually contains. Anything that goes wrong here is worth
+   * knowing about, so it is reported rather than swallowed.
+   */
+  function readBack(gcode) {
+    if (!window.OrcaGcodeView || !gcode) return null;
+    try {
+      return window.OrcaGcodeView.parse(gcode, {
+        filamentDiameter: state.settings.filamentDiameter
+      });
+    } catch (err) {
+      console.error('reading the G-code back failed', err);
+      return null;
+    }
+  }
+
   /** The export button reflects the verdict of the check. */
   function applyExportGate() {
     var button = el('btn-export');
@@ -2169,6 +2351,17 @@
   function invalidate() {
     // Settings or geometry changed — the previous G-code no longer matches.
     if (!state.result) return;
+    // Except a file that was opened rather than sliced: it is what it is. Only
+    // the check is re-run, since that is measured against the chosen machine.
+    if (state.result.external) {
+      if (window.OrcaGcodeCheck) {
+        state.result.report = window.OrcaGcodeCheck.verify(state.result.gcode, state.settings);
+        updateCheckStatus();
+        applyExportGate();
+        if (state.tab === 'check') renderPanel();
+      }
+      return;
+    }
     state.result = null;
     state.safetyOverride = false;
     el('check-status').classList.remove('show');
@@ -2252,6 +2445,8 @@
 
   function exportGcode() {
     if (!state.result) return;
+    // A file that was opened rather than sliced keeps its own name.
+    if (state.result.external) { saveText(state.result.name, state.result.gcode); return; }
     var name = (state.viewer.models[0] && state.viewer.models[0].name) || 'model';
     var quality = state.settings.layerHeight.toFixed(2).replace('.', 'p');
     var filename = name.replace(/[^\w-]+/g, '_') + '_' + quality + 'mm_' +
@@ -2276,7 +2471,13 @@
     // to the native side in chunks and let the system storage picker place it.
     if (window.AndroidSlicer) { exportViaAndroid(filename, gcode); return; }
 
-    var blob = new Blob([gcode], { type: 'text/plain' });
+    saveText(filename, gcode);
+  }
+
+  /** Hand a file to whatever this platform saves files with. */
+  function saveText(filename, text) {
+    if (window.AndroidSlicer) { exportViaAndroid(filename, text); return; }
+    var blob = new Blob([text], { type: 'text/plain' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
@@ -2349,7 +2550,8 @@
   function hideProgress() { el('progress').classList.remove('show'); }
 
   function refreshEmpty() {
-    el('empty').style.display = state.viewer.models.length ? 'none' : 'grid';
+    var showing = state.viewer.models.length || (state.result && state.result.external);
+    el('empty').style.display = showing ? 'none' : 'grid';
     el('btn-slice').disabled = !state.viewer.models.length || state.slicing;
     refreshTools();
   }

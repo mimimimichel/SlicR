@@ -750,6 +750,25 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 .sl-check-banner.fail { background: var(--danger-dim); border-color: rgba(251, 113, 133, .4); color: var(--danger); }
 .sl-check-banner b { display: block; font-size: 15px; margin-bottom: 4px; }
 
+/* What the file itself contains, read back out of the text. The preview is
+   drawn from exactly these numbers. */
+.sl-readback {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.sl-readback > b { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text); }
+.sl-readback.empty { border-color: var(--danger); background: var(--danger-dim); color: var(--danger); }
+.sl-readback .why { color: var(--text-muted); margin-top: 6px; }
+.sl-readback-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px 12px; }
+.sl-readback-rows > div { min-width: 0; }
+.sl-readback-rows b { display: block; color: var(--text); font-variant-numeric: tabular-nums; }
+.sl-readback-rows span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+
 .sl-finding {
   border: 1px solid var(--border);
   border-left-width: 3px;

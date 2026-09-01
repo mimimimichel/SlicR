@@ -545,6 +545,19 @@
         arcExtremes = arc.extremes;
       }
 
+      // G2/G3 is optional in both firmware families — a compile-time flag in
+      // Marlin, the [gcode_arcs] section in Klipper — and a machine without it
+      // does not ignore the command, it stops the print on the spot. Where the
+      // machine's own vendor never sends one, neither may this file. Its own
+      // start and end scripts are its business.
+      if ((cmd === 'G2' || cmd === 'G3') && s.machineArcs === false &&
+          st.inBody && !st.inEnd) {
+        add(ERROR, 'arc.unsupported',
+          'This machine is not sent arc moves by its own vendor, and ' + cmd +
+          ' stops a printer whose firmware was built without them',
+          lineNo, raw, 'Turn arc fitting off for this printer.');
+      }
+
       // --- build volume ---
       if (arcExtremes) {
         for (var ae = 0; ae < arcExtremes.length; ae++) {
