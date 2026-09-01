@@ -31,8 +31,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -293,6 +303,40 @@ public class MainActivity extends Activity {
         }
 
         /**
+         * Find printers the way their own software does: shout on the network
+         * and see who answers.
+         *
+         * A browser cannot send a UDP packet, so the page falls back to knocking
+         * on every address in turn. Here there is no need for any of that — the
+         * two protocols each define a broadcast, and the machines answer it in
+         * milliseconds with their own name and model.
+         *
+         *   Elegoo Centauri Carbon 2   {"id":0,"method":7000} to port 52700
+         *   Elegoo Centauri Carbon     "M99999" to port 3000
+         *
+         * Answers go back through window.OrcaDiscoverResult as JSON.
+         */
+        @JavascriptInterface
+        public void discover() {
+            new Thread(() -> {
+                String json;
+                try {
+                    json = discoverPrinters();
+                } catch (Exception e) {
+                    Log.e(TAG, "discovery failed", e);
+                    json = "[]";
+                }
+                final String payload = json;
+                runOnUiThread(() -> {
+                    if (webView == null) return;
+                    webView.evaluateJavascript(
+                            "window.OrcaDiscoverResult && window.OrcaDiscoverResult(" +
+                                    jsonString(payload) + ");", null);
+                });
+            }, "printer-discovery").start();
+        }
+
+        /**
          * Hand the file that beginSave/appendSave just streamed to an OctoPrint,
          * rather than letting the page do it. The page is served from an https
          * origin and a printer on a home network is http, which a browser blocks
@@ -336,6 +380,136 @@ public class MainActivity extends Activity {
             webView.evaluateJavascript(
                     "window.OrcaOctoResult && window.OrcaOctoResult(" + ok + "," + safe + ");", null);
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding printers
+    // -----------------------------------------------------------------------
+
+    /** One broadcast per protocol, and everything that answered inside a second. */
+    private String discoverPrinters() {
+        Map<String, String> found = new LinkedHashMap<>();     // host -> JSON object
+        List<InetAddress> broadcasts = broadcastAddresses();
+
+        askAndCollect(broadcasts, 52700, "{\"id\": 0, \"method\": 7000}", found, true);
+        askAndCollect(broadcasts, 3000, "M99999", found, false);
+
+        StringBuilder out = new StringBuilder("[");
+        boolean first = true;
+        for (String value : found.values()) {
+            if (!first) out.append(',');
+            out.append(value);
+            first = false;
+        }
+        return out.append(']').toString();
+    }
+
+    /** Every broadcast address this device's own interfaces have. */
+    private List<InetAddress> broadcastAddresses() {
+        List<InetAddress> out = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> nics = NetworkInterface.getNetworkInterfaces();
+            while (nics != null && nics.hasMoreElements()) {
+                NetworkInterface nic = nics.nextElement();
+                if (nic.isLoopback() || !nic.isUp()) continue;
+                for (InterfaceAddress addr : nic.getInterfaceAddresses()) {
+                    InetAddress b = addr.getBroadcast();
+                    if (b != null) out.add(b);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "could not list interfaces", e);
+        }
+        return out;
+    }
+
+    /**
+     * Send one message to every broadcast address and gather the replies for a
+     * second. Printers answer directly rather than broadcasting back, so the
+     * same socket hears them.
+     */
+    private void askAndCollect(List<InetAddress> broadcasts, int port, String message,
+                               Map<String, String> found, boolean elegooCc2) {
+        if (broadcasts.isEmpty()) return;
+        DatagramSocket socket = null;
+        try {
+            socket = new DatagramSocket();
+            socket.setBroadcast(true);
+            socket.setSoTimeout(300);
+            byte[] payload = message.getBytes(StandardCharsets.UTF_8);
+            for (InetAddress b : broadcasts) {
+                try {
+                    socket.send(new DatagramPacket(payload, payload.length, b, port));
+                } catch (IOException ignored) { /* one interface being deaf is normal */ }
+            }
+
+            long until = System.currentTimeMillis() + 1200;
+            byte[] buffer = new byte[8192];
+            while (System.currentTimeMillis() < until) {
+                DatagramPacket reply = new DatagramPacket(buffer, buffer.length);
+                try {
+                    socket.receive(reply);
+                } catch (IOException timeout) {
+                    continue;                                  // nothing yet; keep listening
+                }
+                String host = reply.getAddress().getHostAddress();
+                String body = new String(reply.getData(), 0, reply.getLength(), StandardCharsets.UTF_8);
+                String device = elegooCc2 ? readCc2(host, body) : readSdcp(host, body);
+                if (device != null && !found.containsKey(host)) found.put(host, device);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "broadcast on " + port + " failed", e);
+        } finally {
+            if (socket != null) socket.close();
+        }
+    }
+
+    /**
+     * The Centauri Carbon 2 answers with {"id":.., "result":{...}}. Parsed by
+     * hand rather than with a JSON library, because the fields wanted are three
+     * strings and the alternative is a dependency.
+     */
+    private String readCc2(String host, String body) {
+        if (!body.contains("result")) return null;
+        String name = jsonField(body, "host_name");
+        String model = jsonField(body, "machine_model");
+        String serial = jsonField(body, "sn");
+        if (name.isEmpty() && model.isEmpty() && serial.isEmpty()) return null;
+        return "{\"host\":" + jsonString(host) + ",\"port\":80,\"kind\":\"elegoo_cc2\"" +
+                ",\"label\":\"Elegoo Centauri Carbon 2\"" +
+                ",\"name\":" + jsonString(name.isEmpty() ? (model.isEmpty() ? "Centauri Carbon 2" : model) : name) +
+                ",\"serial\":" + jsonString(serial) + "}";
+    }
+
+    /** The first Centauri Carbon, and anything else speaking SDCP. */
+    private String readSdcp(String host, String body) {
+        if (!body.contains("Data") && !body.contains("MainboardID") && !body.contains("Name")) return null;
+        String name = jsonField(body, "Name");
+        String machine = jsonField(body, "MachineName");
+        String board = jsonField(body, "MainboardID");
+        return "{\"host\":" + jsonString(host) + ",\"port\":3030,\"kind\":\"elegoo_cc1\"" +
+                ",\"label\":\"Elegoo Centauri Carbon\"" +
+                ",\"name\":" + jsonString(!name.isEmpty() ? name : (!machine.isEmpty() ? machine : "Centauri Carbon")) +
+                ",\"serial\":" + jsonString(board) + "}";
+    }
+
+    /** The value of one string field, without pulling in a JSON parser. */
+    private static String jsonField(String body, String key) {
+        String needle = "\"" + key + "\"";
+        int at = body.indexOf(needle);
+        if (at < 0) return "";
+        int colon = body.indexOf(':', at + needle.length());
+        if (colon < 0) return "";
+        int open = body.indexOf('"', colon);
+        if (open < 0) return "";
+        StringBuilder value = new StringBuilder();
+        for (int i = open + 1; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '\\' && i + 1 < body.length()) { value.append(body.charAt(++i)); continue; }
+            if (c == '"') break;
+            value.append(c);
+        }
+        return value.toString();
     }
 
     /** Minimal JSON string escaping — enough to carry an error message safely. */

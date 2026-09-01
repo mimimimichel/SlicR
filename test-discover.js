@@ -169,6 +169,96 @@ D.scan({ base: '192.168.1', from: 1, to: 60, fetch: net, timeout: 50, width: 40 
         probed < 100 && found.length === 0, String(probed));
     });
   })
+  .then(function () {
+    console.log('\n=== 6. working out where to look, without being told ===');
+    ok('the page\'s own subnet comes first when it has one',
+      D.candidateBases('192.168.5.20')[0] === '192.168.5');
+    ok('followed by the ones home routers actually use',
+      D.candidateBases('192.168.5.20').slice(1, 3).join(',') === '192.168.1,192.168.0');
+    ok('and it is not repeated when it is already on the list',
+      D.candidateBases('192.168.1.7').filter(function (b) { return b === '192.168.1'; }).length === 1);
+    ok('with nothing to go on, the common ones are the whole list',
+      D.candidateBases('localhost')[0] === '192.168.1' &&
+      D.candidateBases('localhost').length === D.COMMON.length);
+  })
+  .then(function () {
+    // Ten subnets swept in full would be minutes. Asking each one whether
+    // anybody is home at .1, .254 or .100 is thirty probes.
+    var onlyOn10 = network({ '10.0.0.1:80': { cors: false, paths: {} } });
+    return D.findSubnets({ fetch: onlyOn10, hostname: 'localhost', timeout: 20, ports: [80] })
+      .then(function (bases) {
+        ok('the live subnet is the one that answered', bases.join(',') === '10.0.0', bases.join(','));
+        ok('and it was found with a handful of probes, not a sweep',
+          onlyOn10.calls.length <= D.COMMON.length * D.LANDMARKS.length,
+          String(onlyOn10.calls.length));
+      });
+  })
+  .then(function () {
+    // A router that serves no web page is ordinary; giving up would be wrong.
+    var silent = network({});
+    return D.findSubnets({ fetch: silent, hostname: 'localhost', timeout: 10, ports: [80] })
+      .then(function (bases) {
+        ok('when nothing answers anywhere, the likeliest ranges are tried anyway',
+          bases.length === 2 && bases[0] === '192.168.1', bases.join(','));
+      });
+  })
+  .then(function () {
+    console.log('\n=== 7. and doing the whole thing by itself ===');
+    var lan = network({
+      '192.168.0.1:80': { cors: false, paths: {} },              // the router
+      '192.168.0.31:80': { cors: true, paths: { '/system/info': { error_code: 0,
+        system_info: { sn: 'CC2', host_name: 'Atelier', machine_model: 'Centauri Carbon 2' } } } }
+    });
+    var visited = [];
+    return D.auto({
+      fetch: lan, hostname: 'localhost', timeout: 20, ports: [80], noNative: true,
+      onSubnet: function (b) { visited.push(b); }
+    }).then(function (found) {
+      var printer = found.filter(function (d) { return d.kind === 'elegoo_cc2'; })[0];
+      ok('it finds the printer with nothing typed in at all',
+        !!printer && printer.name === 'Atelier', JSON.stringify(found));
+      // The router answered too, and there is no way to tell a router from a
+      // printer that will not be read. Listing it is the honest result.
+      ok('and lists the router alongside it rather than guessing',
+        found.length === 2 && found.some(function (d) { return d.kind === 'unknown'; }),
+        JSON.stringify(found.map(function (d) { return d.host + ' ' + d.kind; })));
+      ok('having looked only in the subnet that was alive',
+        visited.join(',') === '192.168.0', visited.join(','));
+    });
+  })
+  .then(function () {
+    // Where the app is, none of the sweeping happens: the native side asks the
+    // network directly and answers with what it heard.
+    var called = false;
+    D.__root = null;
+    globalThis.AndroidSlicer = {
+      discover: function () {
+        called = true;
+        setTimeout(function () {
+          globalThis.OrcaDiscoverResult(JSON.stringify([
+            { host: '192.168.4.19', port: 80, kind: 'elegoo_cc2', name: 'Centauri', serial: 'CC2X' }
+          ]));
+        }, 0);
+      }
+    };
+    return D.auto({ timeout: 2000 }).then(function (found) {
+      delete globalThis.AndroidSlicer;
+      ok('in the app the broadcast is used instead of a sweep', called === true);
+      ok('and what it heard comes back named',
+        found.length === 1 && found[0].kind === 'elegoo_cc2' && found[0].identified === true,
+        JSON.stringify(found));
+    });
+  })
+  .then(function () {
+    // A broadcast that nobody answers must not hang the panel forever.
+    globalThis.AndroidSlicer = { discover: function () { /* silence */ } };
+    var started = Date.now();
+    return D.auto({ timeout: 250 }).then(function (found) {
+      delete globalThis.AndroidSlicer;
+      ok('a silent network gives up in its own time (' + (Date.now() - started) + ' ms)',
+        found.length === 0 && Date.now() - started < 2000);
+    });
+  })
   .then(done, function (err) {
     fail++;
     console.log('  FAIL  the chain threw: ' + (err && err.stack || err));

@@ -41,8 +41,9 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   const banner = await page.locator('.sl-check-banner').first().textContent();
   ok('it says outright that nothing is connected yet',
     /No printer connected/.test(banner), banner);
-  ok('and offers a subnet to sweep', await page.locator('#scan-base').count() === 1);
-  ok('with a scan button', await page.locator('#btn-scan').count() === 1);
+  ok('there is nothing to type in — one button and no subnet box',
+    await page.locator('#scan-base').count() === 0 &&
+    await page.locator('#btn-scan').count() === 1);
 
   // Point the sweep at the loopback range the stand-in printers are on, and at
   // their ports. This is the shipped scanner, over real sockets.
@@ -82,21 +83,17 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
     named.length === 1 && named[0].kind === 'octoprint' && /1\.10\.2/.test(named[0].name),
     JSON.stringify(named));
 
-  // Now drive it through the panel rather than the module: run the real scan
-  // over a range that contains one of them, and press "Use this one".
+  // Now through the panel, with nothing typed: the same automatic path a user
+  // gets. Only the constants are moved — the subnets it considers and the ports
+  // it knows — so the code that decides where to look is the shipped code.
   await page.evaluate(() => {
-    // The panel sweeps ports 80, 5000 and 3030 by default; the stand-ins are
-    // elsewhere, so this narrows the scan the way a user would not have to.
-    const orig = window.OrcaDiscover.scan;
-    window.OrcaDiscover.scan = function (opts) {
-      opts.ports = [5098, 5099];
-      opts.from = 1; opts.to = 3;
-      opts.timeout = 800;
-      return orig.call(this, opts);
-    };
+    window.OrcaDiscover.COMMON.length = 0;
+    window.OrcaDiscover.COMMON.push('127.0.0');
+    window.OrcaDiscover.PORTS.length = 0;
+    window.OrcaDiscover.PORTS.push(5098, 5099);
+    window.OrcaDiscover.LANDMARKS.length = 0;
+    window.OrcaDiscover.LANDMARKS.push(1, 2);
   });
-  await page.fill('#scan-base', '127.0.0');
-  await page.dispatchEvent('#scan-base', 'change');
   await page.click('#btn-scan');
   await page.waitForFunction(() => {
     const s = document.getElementById('scan-status');
@@ -104,7 +101,8 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   }, { timeout: 60000 });
 
   const status = await page.locator('#scan-status').textContent();
-  ok('the panel reports what it found (' + status.trim() + ')', /2 devices answered/.test(status), status);
+  ok('the panel found them without being told where to look (' + status.trim() + ')',
+    /2 devices answered/.test(status), status);
   const cards = page.locator('.sl-advice-item');
   ok('one card per device', await cards.count() === 2, String(await cards.count()));
   const labels = await cards.locator('.msg').allTextContents();

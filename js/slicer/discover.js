@@ -69,6 +69,21 @@
     }
   ];
 
+  /**
+   * Where to look when nobody has said. The page's own address first, when it
+   * has a private one; then the ranges home routers actually hand out, most
+   * common first. Sweeping ten subnets in full would take minutes, so the ones
+   * below are narrowed down before any of them is swept — see findSubnets.
+   */
+  var COMMON = [
+    '192.168.1', '192.168.0', '192.168.2', '10.0.0', '10.0.1',
+    '192.168.10', '192.168.8', '192.168.4', '192.168.43', '172.20.10'
+  ];
+
+  // The addresses a router or a gateway almost always answers on. Finding one
+  // of these is how a subnet is recognised as the live one without sweeping it.
+  var LANDMARKS = [1, 254, 100];
+
   /** The /24 this page is being served from, when that is knowable. */
   function guessBase(hostname) {
     var h = String(hostname || (typeof location !== 'undefined' ? location.hostname : ''));
@@ -218,6 +233,114 @@
     return attempt();
   }
 
+  /**
+   * Which of the candidate subnets this machine is actually on. Ten subnets
+   * swept in full is minutes of waiting; ten subnets asked "is anyone home at
+   * .1, .254 or .100" is thirty probes and a second or two.
+   */
+  function findSubnets(opts) {
+    opts = opts || {};
+    var f = fetcher(opts);
+    if (!f) return Promise.reject(new Error('This browser has no fetch.'));
+    var timeout = opts.timeout || 900;
+    var bases = opts.bases || candidateBases(opts.hostname);
+    var ports = opts.ports || PORTS;
+
+    var probes = [];
+    bases.forEach(function (base) {
+      LANDMARKS.forEach(function (n) {
+        ports.forEach(function (port) { probes.push({ base: base, host: base + '.' + n, port: port }); });
+      });
+    });
+
+    var live = {};
+    return pool(probes, opts.width || 32, function (t) {
+      if (opts.cancelled && opts.cancelled()) return null;
+      if (live[t.base]) return null;                    // this one is settled
+      var url = 'http://' + t.host + (t.port === 80 ? '' : ':' + t.port) + '/';
+      return withTimeout(f(url, { mode: 'no-cors', cache: 'no-store' }), timeout, opts)
+        .then(function () { live[t.base] = true; return t.base; }, function () { return null; });
+    }).then(function () {
+      var order = bases.filter(function (b) { return live[b]; });
+      // Nothing answered anywhere: rather than give up, sweep the two most
+      // likely ranges in full. A router that does not serve a web page is
+      // ordinary, and its subnet is still the right one to look in.
+      return order.length ? order : bases.slice(0, 2);
+    });
+  }
+
+  /** The subnets worth trying, best first, with no duplicates. */
+  function candidateBases(hostname) {
+    var own = guessBase(hostname);
+    var out = own ? [own] : [];
+    COMMON.forEach(function (b) { if (out.indexOf(b) < 0) out.push(b); });
+    return out;
+  }
+
+  /**
+   * Find printers without being told where to look.
+   *
+   * In the app the native side does this properly: it reads the device's own
+   * address and sends the UDP broadcasts both protocols answer. In a browser
+   * neither is possible, so it works out which subnet this machine is on and
+   * sweeps that.
+   */
+  function auto(opts) {
+    opts = opts || {};
+    if (!opts.noNative && root.AndroidSlicer && root.AndroidSlicer.discover) {
+      return nativeDiscover(opts);
+    }
+    return findSubnets(opts).then(function (bases) {
+      var all = [];
+      var i = 0;
+      function sweep() {
+        if (i >= bases.length || (opts.cancelled && opts.cancelled())) return Promise.resolve(all);
+        var base = bases[i++];
+        if (opts.onSubnet) opts.onSubnet(base, i, bases.length);
+        var one = {};
+        for (var k in opts) if (Object.prototype.hasOwnProperty.call(opts, k)) one[k] = opts[k];
+        one.base = base;
+        return scan(one).then(function (found) {
+          all = all.concat(found);
+          // Something was found: no reason to keep knocking on other subnets.
+          if (found.length) return all;
+          return sweep();
+        });
+      }
+      return sweep();
+    });
+  }
+
+  /**
+   * The app's own discovery, which is the real thing: a UDP broadcast that both
+   * protocols answer, on a device that knows its own address.
+   */
+  function nativeDiscover(opts) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () { finish([]); }, (opts && opts.timeout) || 6000);
+      function finish(list) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        root.OrcaDiscoverResult = null;
+        resolve(list);
+      }
+      root.OrcaDiscoverResult = function (json) {
+        var list = [];
+        try { list = JSON.parse(json) || []; } catch (e) { list = []; }
+        list.forEach(function (d) {
+          d.identified = d.kind !== 'unknown';
+          d.label = d.label || (d.kind === 'elegoo_cc2' ? 'Elegoo Centauri Carbon 2'
+            : d.kind === 'elegoo_cc1' ? 'Elegoo Centauri Carbon' : 'Something answered');
+          if (opts && opts.onFound) opts.onFound(d);
+        });
+        finish(list);
+      };
+      try { root.AndroidSlicer.discover(); } catch (e) { finish([]); }
+    });
+  }
+
   /** The address to hand the printer client for a device that was found. */
   function addressOf(device) {
     if (!device) return '';
@@ -227,7 +350,12 @@
   var api = {
     PORTS: PORTS,
     PROBES: PROBES,
+    COMMON: COMMON,
+    LANDMARKS: LANDMARKS,
     guessBase: guessBase,
+    candidateBases: candidateBases,
+    findSubnets: findSubnets,
+    auto: auto,
     addressOf: addressOf,
     scan: scan
   };

@@ -41,7 +41,7 @@
     link: { kind: 'none', url: '', key: '', autoStart: false },
     sending: false,
     // The sweep of the local network, and what it turned up.
-    scan: { running: false, base: '', found: [], done: false, error: '', cancel: false },
+    scan: { running: false, where: '', found: [], done: false, error: '', cancel: false },
     // What the printer last said about itself, and the poll that keeps asking.
     control: { state: null, error: '', note: '', reading: false, busy: false, timer: null }
   };
@@ -743,7 +743,7 @@
     box.className = 'sl-section';
     box.open = true;
     var summary = document.createElement('summary');
-    summary.textContent = 'Find a printer on this network';
+    summary.textContent = 'Find a printer';
     box.appendChild(summary);
 
     if (!window.OrcaDiscover) {
@@ -755,27 +755,13 @@
       return;
     }
 
-    if (!state.scan.base) {
-      state.scan.base = window.OrcaDiscover.guessBase() || '192.168.1';
-    }
-
-    var baseInput = octoInput('text', '192.168.1', state.scan.base, function (v) {
-      state.scan.base = v.replace(/\.+$/, '');
-    });
-    baseInput.id = 'scan-base';
-    box.appendChild(octoRow('Subnet',
-      window.OrcaDiscover.guessBase()
-        ? 'Taken from this page\'s own address'
-        : 'The first three numbers of your network\'s addresses',
-      baseInput));
-
     var row = document.createElement('div');
     row.className = 'sl-row';
     var go = document.createElement('button');
     go.className = 'sl-btn primary';
     go.type = 'button';
     go.id = 'btn-scan';
-    go.textContent = state.scan.running ? 'Stop' : 'Scan';
+    go.textContent = state.scan.running ? 'Stop' : 'Look for printers';
     go.onclick = function () {
       if (state.scan.running) { state.scan.cancel = true; return; }
       startScan();
@@ -787,14 +773,18 @@
     status.className = 'sl-hint';
     status.id = 'scan-status';
     status.textContent = state.scan.running
-      ? 'Knocking on every address in ' + state.scan.base + '.1 to .254 — this takes a moment.'
+      ? (state.scan.where || 'Looking…')
       : (state.scan.error ? state.scan.error
         : (state.scan.done
           ? (state.scan.found.length
-            ? state.scan.found.length + ' device' + (state.scan.found.length > 1 ? 's' : '') + ' answered.'
-            : 'Nothing answered on ' + state.scan.base + '. Check the subnet, or enter the address by hand below.')
-          : 'A browser cannot broadcast, so this knocks on each address in turn. ' +
-            'The app can ask the network properly; a web page cannot.'));
+            ? state.scan.found.length + ' device' + (state.scan.found.length > 1 ? 's' : '') +
+              ' answered' + (state.scan.where ? ' on ' + state.scan.where + '.x' : '') + '.'
+            : 'Nothing answered. The printer may be asleep, on another network, or on ' +
+              'a range this cannot guess — the address can still be typed in below.')
+          : (window.AndroidSlicer && window.AndroidSlicer.discover
+            ? 'The app asks the network directly, the way Elegoo Link does.'
+            : 'This works out which network you are on and knocks on every address in it. ' +
+              'A browser cannot broadcast, so it takes a few seconds.')));
     box.appendChild(status);
 
     state.scan.found.forEach(function (device) {
@@ -843,14 +833,19 @@
     state.scan.cancel = false;
     state.scan.done = false;
     state.scan.error = '';
+    state.scan.where = '';
     state.scan.found = [];
     renderPanel();
 
-    window.OrcaDiscover.scan({
-      base: state.scan.base,
+    window.OrcaDiscover.auto({
       // An OctoPrint says nothing without its key. If one has been entered
       // already, the sweep can use it and the machine names itself.
       key: state.link.kind === 'octoprint' ? state.link.key : '',
+      onSubnet: function (base, n, total) {
+        state.scan.where = 'Looking through ' + base + '.1 to .254' +
+          (total > 1 ? ' (' + n + ' of ' + total + ')' : '') + '…';
+        if (state.tab === 'device') renderPanel();
+      },
       onFound: function (device) {
         state.scan.found.push(device);
         if (state.tab === 'device') renderPanel();
@@ -860,6 +855,7 @@
       state.scan.found = found;
       state.scan.running = false;
       state.scan.done = true;
+      state.scan.where = found.length ? found[0].host.split('.').slice(0, 3).join('.') : '';
       if (state.tab === 'device') renderPanel();
     }, function (err) {
       state.scan.running = false;
