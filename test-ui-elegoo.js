@@ -6,7 +6,7 @@
  * the file arrived whole rather than merely whether the requests looked right.
  *
  *   python3 -m http.server 8099                            (from the repo root)
- *   python3 test-elegoo-server.py 5098 123456 127.0.0.1     (in another shell)
+ *   python3 test-elegoo-server.py 5098 123456 127.0.0.1 cors     (in another shell)
  *   node test-ui-elegoo.js
  */
 const { chromium } = require('playwright');

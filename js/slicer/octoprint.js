@@ -62,6 +62,9 @@
 
   /** A thrown network error, which in a browser carries no status at all. */
   function explainNetwork(url) {
+    if (root.OrcaNet && root.OrcaNet.explainBlocked) {
+      return root.OrcaNet.explainBlocked(url, 'octoprint');
+    }
     var https = typeof location !== 'undefined' && location.protocol === 'https:';
     return 'No answer from ' + url + '. ' + (https
       ? 'This page is on https and the printer is almost certainly on http, ' +
@@ -70,6 +73,15 @@
       : 'Either the address is wrong, the machine is off, or OctoPrint has not ' +
         'been told to allow requests from other pages — Settings → API → Allow ' +
         'Cross Origin Resource Sharing (CORS), then restart it.');
+  }
+
+  /** The multipart builder, however this file was loaded. */
+  function multipart() {
+    if (root.OrcaMultipart) return root.OrcaMultipart;
+    if (typeof require === 'function') {
+      try { return require('./multipart.js'); } catch (e) { return null; }
+    }
+    return null;
   }
 
   function headers(key, extra) {
@@ -84,6 +96,10 @@
    */
   function fetcher(opts) {
     if (opts && opts.fetch) return opts.fetch;
+    // Inside the app every printer request goes out through Java: a browser is
+    // not allowed to talk to a machine that does not invite it, and printers
+    // do not. See net.js.
+    if (typeof root.OrcaFetch === 'function') return root.OrcaFetch;
     if (typeof fetch === 'function') return fetch;
     return null;
   }
@@ -149,18 +165,20 @@
     var target = opts.target === 'sdcard' ? 'sdcard' : 'local';
     var file = fileName(name);
 
-    if (typeof FormData !== 'function' || typeof Blob !== 'function') {
-      return Promise.reject(new Error('This browser cannot build a file upload.'));
-    }
-    var form = new FormData();
-    form.append('file', new Blob([gcode], { type: 'text/x.gcode' }), file);
+    var mp = multipart();
+    if (!mp) return Promise.reject(new Error('The upload code did not load.'));
+
     // Printing is the one irreversible thing here, so it is only ever done when
     // asked for outright — and a file that is going to print has to be the
     // selected job first, which is the only place select is implied.
-    if (opts.select || opts.print) form.append('select', 'true');
-    if (opts.print) form.append('print', 'true');
+    var parts = [];
+    if (opts.select || opts.print) parts.push({ name: 'select', value: 'true' });
+    if (opts.print) parts.push({ name: 'print', value: 'true' });
+    parts.push({ name: 'file', value: gcode, filename: file, type: 'text/x.gcode' });
+    var form = mp.build(parts);
 
-    return request('POST', '/api/files/' + target, cfg, opts, { body: form })
+    return request('POST', '/api/files/' + target, cfg, opts,
+      { body: form.body, headers: { 'Content-Type': form.contentType } })
       .then(function (res) {
         return {
           name: file,

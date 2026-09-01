@@ -97,6 +97,10 @@
 
   function fetcher(opts) {
     if (opts && opts.fetch) return opts.fetch;
+    // Inside the app the page cannot reach the network at all, and a printer
+    // will not answer a web page's questions about itself even outside it, so
+    // where there is a native transport the probes go through it. See net.js.
+    if (typeof root.OrcaFetch === 'function') return root.OrcaFetch;
     if (typeof fetch === 'function') return fetch;
     return null;
   }

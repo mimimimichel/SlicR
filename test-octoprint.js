@@ -34,17 +34,40 @@ function stub(reply) {
 
 var cfg = { url: 'octopi.local', key: 'ABC123' };
 
-// Stand-ins for the two browser globals the upload is built from, so the real
-// code path runs here rather than a test-only one beside it.
-var lastForm = null;
-globalThis.Blob = function (parts, o) { this.parts = parts; this.type = o && o.type; };
-globalThis.FormData = function () {
-  this.parts = [];
-  lastForm = this;
-  this.append = function (k, v, n) {
-    this.parts.push([k, v instanceof globalThis.Blob ? 'blob:' + n : String(v)]);
-  };
-};
+/**
+ * Read a multipart body the way a server does. The upload builds its own body
+ * rather than handing a FormData to the browser — it has to cross a native
+ * bridge inside the app, where FormData does not exist — so what is checked
+ * here is the bytes that go on the wire.
+ */
+function parseMultipart(body, contentType) {
+  var b = /boundary=(.+)$/.exec(contentType || '');
+  if (!b) return null;
+  var boundary = '--' + b[1];
+  var chunks = String(body).split(boundary);
+  var parts = [];
+  for (var i = 1; i < chunks.length; i++) {
+    var chunk = chunks[i];
+    if (/^--/.test(chunk)) break;                       // the closing boundary
+    var split = chunk.indexOf('\r\n\r\n');
+    if (split < 0) continue;
+    var head = chunk.slice(0, split);
+    var value = chunk.slice(split + 4);
+    if (/\r\n$/.test(value)) value = value.slice(0, -2);
+    var name = /name="([^"]*)"/.exec(head);
+    var filename = /filename="([^"]*)"/.exec(head);
+    var type = /Content-Type:\s*(\S+)/i.exec(head);
+    parts.push({ name: name && name[1], filename: filename && filename[1],
+                 type: type && type[1], value: value });
+  }
+  return parts;
+}
+function formOf(call) {
+  return parseMultipart(call.init.body, (call.init.headers || {})['Content-Type']);
+}
+function fieldNames(parts) {
+  return parts.map(function (p) { return p.name; }).join(',');
+}
 
 console.log('=== 1. addresses ===');
 ok('a bare host becomes an http origin', O.normaliseUrl('octopi.local') === 'http://octopi.local');
@@ -95,34 +118,41 @@ O.test(cfg, { fetch: f1 }).then(function (info) {
     .then(function (res) {
       ok('upload posts to /api/files/local',
         f3.calls[0].url === 'http://octopi.local/api/files/local', f3.calls[0].url);
-      ok('as a POST carrying the form', f3.calls[0].init.method === 'POST' &&
-        f3.calls[0].init.body === lastForm);
-      ok('with the G-code attached under the sanitised name',
-        JSON.stringify(lastForm.parts[0]) === '["file","blob:mon_part.gcode"]',
-        JSON.stringify(lastForm.parts));
+      var form = formOf(f3.calls[0]);
+      ok('as a POST carrying a multipart body', f3.calls[0].init.method === 'POST' &&
+        /^multipart\/form-data; boundary=/.test((f3.calls[0].init.headers || {})['Content-Type']),
+        JSON.stringify(f3.calls[0].init.headers));
+      var filePart = form.filter(function (p) { return p.name === 'file'; })[0];
+      ok('with the G-code attached under the sanitised name, byte for byte',
+        filePart && filePart.filename === 'mon_part.gcode' && filePart.value === 'G28\n',
+        JSON.stringify(form));
+      ok('and the boundary does not appear inside the file',
+        f3.calls[0].init.body.indexOf('G28') > 0, 'boundary clash');
       ok('and reports where it landed', res.location === 'mon_part.gcode' && res.started === true,
         JSON.stringify(res));
     });
 }).then(function () {
   // Printing is never implied: without it, neither flag is set.
-  return O.upload(cfg, 'p', 'G28\n', { fetch: stub({ status: 201, body: '{}' }) })
+  var f4 = stub({ status: 201, body: '{}' });
+  return O.upload(cfg, 'p', 'G28\n', { fetch: f4 })
     .then(function (res) {
       ok('an upload with nothing asked for starts nothing',
-        lastForm.parts.length === 1 && res.started === false, JSON.stringify(lastForm.parts));
+        fieldNames(formOf(f4.calls[0])) === 'file' && res.started === false,
+        fieldNames(formOf(f4.calls[0])));
     });
 }).then(function () {
-  return O.upload(cfg, 'p', 'G28\n', { fetch: stub({ status: 201, body: '{}' }), select: true })
+  var f5 = stub({ status: 201, body: '{}' });
+  return O.upload(cfg, 'p', 'G28\n', { fetch: f5, select: true })
     .then(function () {
       ok('selecting loads the job without starting it',
-        JSON.stringify(lastForm.parts.slice(1)) === '[["select","true"]]',
-        JSON.stringify(lastForm.parts));
+        fieldNames(formOf(f5.calls[0])) === 'select,file', fieldNames(formOf(f5.calls[0])));
     });
 }).then(function () {
-  return O.upload(cfg, 'p', 'G28\n', { fetch: stub({ status: 201, body: '{}' }), print: true })
+  var f6 = stub({ status: 201, body: '{}' });
+  return O.upload(cfg, 'p', 'G28\n', { fetch: f6, print: true })
     .then(function () {
       ok('and printing implies selecting',
-        JSON.stringify(lastForm.parts.slice(1)) === '[["select","true"],["print","true"]]',
-        JSON.stringify(lastForm.parts));
+        fieldNames(formOf(f6.calls[0])) === 'select,print,file', fieldNames(formOf(f6.calls[0])));
     });
 }).then(function () {
   console.log('\n=== 5. failures reach the caller as sentences ===');

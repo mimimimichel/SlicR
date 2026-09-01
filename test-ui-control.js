@@ -6,7 +6,7 @@
  * rather than trusting the button.
  *
  *   python3 -m http.server 8099                             (from the repo root)
- *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2
+ *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2 cors
  *   node test-ui-control.js
  */
 const { chromium } = require('playwright');

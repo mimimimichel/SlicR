@@ -28,6 +28,9 @@ state = {
 }
 
 
+CORS = False
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -35,6 +38,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _cors(self):
+        # A real OctoPrint sends no CORS headers unless its owner switches them
+        # on (Settings -> API -> Allow Cross Origin Requests), and a printer's
+        # own web server sends none at all. Off by default here for the same
+        # reason: a stand-in that is more agreeable than the real thing tests
+        # nothing worth testing.
+        if not CORS:
+            return
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "X-Api-Key, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -154,6 +164,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 HOST = sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1"
+# Pass "cors" as the fourth argument to behave like a server whose owner
+# has switched cross-origin requests on.
+CORS = len(sys.argv) > 4 and sys.argv[4].lower() in ("cors", "1", "true", "yes")
 
 
 if __name__ == "__main__":

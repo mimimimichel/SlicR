@@ -179,23 +179,42 @@ E.cc2Upload(cfg, 'ma pièce', gcode, { fetch: f1 }).then(function (res) {
   });
 }).then(function () {
   console.log('\n=== 8. the first Centauri Carbon, which speaks SDCP ===');
-  var lastForm = null;
-  globalThis.Blob = function (parts, o) { this.parts = parts; this.type = o && o.type; };
-  globalThis.FormData = function () {
-    this.fields = {};
-    lastForm = this;
-    this.append = function (k, v, n) {
-      this.fields[k] = (v instanceof globalThis.Blob) ? 'blob:' + n : String(v);
-    };
-  };
+  // The body is built by this code rather than by the browser — it has to
+  // cross a native bridge inside the app, where FormData does not exist — so
+  // what is read back here is the bytes that go on the wire.
+  function parseMultipart(body, contentType) {
+    var b = /boundary=(.+)$/.exec(contentType || '');
+    if (!b) return null;
+    var chunks = String(body).split('--' + b[1]);
+    var fields = {}, files = {};
+    for (var i = 1; i < chunks.length; i++) {
+      if (/^--/.test(chunks[i])) break;
+      var split = chunks[i].indexOf('\r\n\r\n');
+      if (split < 0) continue;
+      var head = chunks[i].slice(0, split);
+      var value = chunks[i].slice(split + 4).replace(/\r\n$/, '');
+      var name = /name="([^"]*)"/.exec(head);
+      var filename = /filename="([^"]*)"/.exec(head);
+      if (!name) continue;
+      if (filename) files[name[1]] = { filename: filename[1], value: value };
+      else fields[name[1]] = value;
+    }
+    return { fields: fields, files: files, order: Object.keys(fields).concat(Object.keys(files)) };
+  }
   var cc1 = { url: '192.168.1.50', model: 'cc1' };
   var f = stub({ status: 200, body: '{"code":"000000","success":true}' });
   return E.upload(cc1, 'ma pièce', gcode, { fetch: f }).then(function (res) {
     ok('POSTs multipart to /uploadFile/upload on port 3030',
       f.calls[0].url === 'http://192.168.1.50:3030/uploadFile/upload' &&
       f.calls[0].init.method === 'POST', f.calls[0].url);
-    ok('with the MD5 and the size', lastForm.fields['S-File-MD5'] === expectedMd5 &&
-      lastForm.fields.TotalSize === String(Buffer.byteLength(gcode)));
+    var form = parseMultipart(f.calls[0].init.body,
+      (f.calls[0].init.headers || {})['Content-Type']);
+    ok('with the MD5 and the size', form.fields['S-File-MD5'] === expectedMd5 &&
+      form.fields.TotalSize === String(Buffer.byteLength(gcode)), JSON.stringify(form.fields));
+    ok('the G-code itself, byte for byte, named and last',
+      form.files.File && form.files.File.value === gcode &&
+      form.files.File.filename === 'ma_pi_ce.gcode' &&
+      form.order[form.order.length - 1] === 'File', JSON.stringify(form.order));
     ok('and reports where it landed', res.path === '/local/ma_pi_ce.gcode');
   }).then(function () {
     var lastSocket = null;

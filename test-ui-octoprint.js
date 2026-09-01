@@ -6,16 +6,26 @@
  * arrived.
  *
  *   python3 -m http.server 8099                             (from the repo root)
- *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2  (in another shell)
+ *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2 cors  (in another shell)
+ *   python3 test-octoprint-server.py 5097 TESTKEY 127.0.0.2        (and one without)
+ *
+ * The first stand-in has cross-origin requests switched on, because that is the
+ * only configuration a browser can reach at all: OctoPrint ships with them off,
+ * and until its owner turns them on the request never leaves the page. The
+ * second is left as OctoPrint ships, to check the app says so. What the app
+ * does about it — talk to printers natively, where those rules do not apply —
+ * is test-ui-native-send.js.
  *   node test-ui-octoprint.js
  */
 const { chromium } = require('playwright');
 
-const APP = process.env.APP || 'http://localhost:8099/index.html';
+const APP = process.env.APP || 'http://localhost:8099/slicer.html';
 // The stand-ins sit on two loopback addresses so the Device tab's sweep can
 // tell them apart the way it would tell apart two machines on a real network.
 const OCTO = process.env.OCTO || '127.0.0.2:5099';
 const KEY = process.env.OCTO_KEY || 'TESTKEY';
+/** The same stand-in, left as OctoPrint ships it: no cross-origin headers. */
+const NOCORS = process.env.OCTO_NOCORS || '127.0.0.2:5097';
 
 (async () => {
   const browser = await chromium.launch({
@@ -169,12 +179,37 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
     exported.indexOf(KEY) < 0 && exported.indexOf('octo') < 0,
     exported.slice(0, 120));
 
-  // The wrong-key step above provokes exactly one 403, which the browser logs
-  // whatever the page does with it. Anything else is a real fault.
-  const unexpected = errors.filter(e => !/403 \(Forbidden\)/.test(e));
-  ok('one 403 from the deliberate wrong key, and nothing else in the console',
-    unexpected.length === 0 && errors.length === 1,
-    JSON.stringify(errors.slice(0, 3)));
+  // And the same printer as OctoPrint ships it, with cross-origin requests off:
+  // the request never leaves the page, and the app has to say why rather than
+  // shrug at it.
+  // The panel may already be open here, and openMachineTab toggles it.
+  await page.evaluate(() => {
+    if (!document.getElementById('panel').classList.contains('open')) {
+      document.getElementById('btn-panel').click();
+    }
+  });
+  await page.click('[data-tab="device"]');
+  await page.waitForTimeout(300);
+  await section.locator('summary').click().catch(() => {});
+  await page.waitForTimeout(200);
+  await section.locator('input[type="text"]').first().fill(NOCORS);
+  await section.locator('input[type="text"]').first().dispatchEvent('change');
+  await page.click('#btn-octo-test');
+  await page.waitForFunction(() => {
+    const r = document.getElementById('octo-result');
+    return r && r.textContent && !/Asking/.test(r.textContent);
+  }, { timeout: 20000 });
+  const blocked = await page.locator('#octo-result').textContent();
+  ok('a printer that has not been told to accept web pages is named as such',
+    /Cross Origin|CORS/i.test(blocked) && /Android app/i.test(blocked), blocked);
+
+  // The wrong-key step provokes one 403, and the step above is refused by the
+  // browser before it leaves — both are the test asking for them. Anything else
+  // is a real fault.
+  const unexpected = errors.filter(e =>
+    !/403 \(Forbidden\)/.test(e) && !/CORS policy|ERR_FAILED|Failed to load resource/.test(e));
+  ok('nothing in the console but the refusals this test asked for',
+    unexpected.length === 0, JSON.stringify(unexpected.slice(0, 3)));
   await browser.close();
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail ? 1 : 0);

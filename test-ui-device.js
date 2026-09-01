@@ -6,8 +6,8 @@
  * stubbed inside the page: the browser opens every connection itself.
  *
  *   python3 -m http.server 8099                             (from the repo root)
- *   python3 test-elegoo-server.py 5098 123456 127.0.0.1
- *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2
+ *   python3 test-elegoo-server.py 5098 123456 127.0.0.1 cors
+ *   python3 test-octoprint-server.py 5099 TESTKEY 127.0.0.2 cors
  *   node test-ui-device.js
  */
 const { chromium } = require('playwright');

@@ -74,10 +74,30 @@
     return n;
   }
 
+  /** The multipart builder, however this file was loaded. */
+  function multipart() {
+    if (root.OrcaMultipart) return root.OrcaMultipart;
+    if (typeof require === 'function') {
+      try { return require('./multipart.js'); } catch (e) { return null; }
+    }
+    return null;
+  }
+
   function fetcher(opts) {
     if (opts && opts.fetch) return opts.fetch;
+    // Inside the app every printer request goes out through Java: a browser is
+    // not allowed to talk to a machine that does not invite it, and printers
+    // do not. See net.js.
+    if (typeof root.OrcaFetch === 'function') return root.OrcaFetch;
     if (typeof fetch === 'function') return fetch;
     return null;
+  }
+
+  /** How many bytes a string becomes once written out as UTF-8. */
+  function byteLengthOf(text) {
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).length;
+    if (typeof Buffer !== 'undefined') return Buffer.byteLength(text, 'utf8');
+    return bytesOf(text).length;
   }
 
   function bytesOf(text) {
@@ -93,6 +113,11 @@
   }
 
   function explainNetwork(url) {
+    // A printer's own web server never invites a web page to talk to it, and
+    // no setting on the printer changes that. net.js says so properly.
+    if (root.OrcaNet && root.OrcaNet.explainBlocked) {
+      return root.OrcaNet.explainBlocked(url, 'elegoo');
+    }
     var https = typeof location !== 'undefined' && location.protocol === 'https:';
     return 'No answer from ' + url + '. ' + (https
       ? 'This page is on https and the printer is on http, which the browser ' +
@@ -170,12 +195,38 @@
     var url = base + '/upload';
     var chunkSize = opts.chunkSize || CHUNK;
 
-    function sendChunk(offset) {
-      if (offset >= total) {
-        return Promise.resolve({ name: file, md5: digest, size: total, chunks: Math.ceil(total / chunkSize) });
+    /**
+     * The pieces, cut on character boundaries and measured in bytes.
+     *
+     * They go as text rather than as an array of bytes: inside the app the
+     * request leaves through Java, which takes a string, and G-code is text
+     * anyway. Each piece's byte length is measured from the piece itself, so
+     * the ranges stay exact whatever is in it.
+     */
+    var pieces = [];
+    (function () {
+      var at = 0, byteAt = 0;
+      while (at < gcode.length) {
+        var stop = Math.min(at + chunkSize, gcode.length);
+        if (stop < gcode.length) {
+          var code = gcode.charCodeAt(stop - 1);
+          if (code >= 0xd800 && code <= 0xdbff) stop--;   // never split a pair
+        }
+        var text = gcode.slice(at, stop);
+        var size = byteLengthOf(text);
+        pieces.push({ text: text, from: byteAt, to: byteAt + size });
+        byteAt += size;
+        at = stop;
       }
-      var end = Math.min(offset + chunkSize, total);
-      var piece = bytes.subarray(offset, end);
+    })();
+
+    function sendChunk(index) {
+      if (index >= pieces.length) {
+        return Promise.resolve({ name: file, md5: digest, size: total, chunks: pieces.length });
+      }
+      var piece = pieces[index].text;
+      var offset = pieces[index].from;
+      var end = pieces[index].to;
       var headers = {
         'Content-Type': 'application/octet-stream',
         'Content-Range': 'bytes ' + offset + '-' + (end - 1) + '/' + total,
@@ -191,7 +242,7 @@
           var body = {};
           try { body = JSON.parse(text); } catch (e) { /* some builds answer nothing */ }
           if (body && body.error_code) throw new Error(cc2Explain(200, body.error_code, url));
-          return sendChunk(end);
+          return sendChunk(index + 1);
         });
       }, function () { throw new Error(explainNetwork(url)); });
     }
@@ -220,9 +271,8 @@
     if (!base) return Promise.reject(new Error('No printer address set.'));
     var f = fetcher(opts);
     if (!f) return Promise.reject(new Error('This browser has no fetch.'));
-    if (typeof FormData !== 'function' || typeof Blob !== 'function') {
-      return Promise.reject(new Error('This browser cannot build a file upload.'));
-    }
+    var mp = multipart();
+    if (!mp) return Promise.reject(new Error('The upload code did not load.'));
     var md5 = md5lib();
     if (!md5) return Promise.reject(new Error('The checksum code did not load.'));
 
@@ -230,16 +280,21 @@
     var bytes = bytesOf(gcode);
     var digest = md5.md5Bytes(bytes);
 
-    var form = new FormData();
-    form.append('S-File-MD5', digest);
-    form.append('Check', '1');
-    form.append('Offset', '0');
-    form.append('Uuid', opts.uuid || uuid());
-    form.append('TotalSize', String(bytes.length));
-    form.append('File', new Blob([gcode], { type: 'application/octet-stream' }), file);
+    // The file goes last: the firmware reads these as a stream and wants the
+    // description of the file before the file itself.
+    var form = mp.build([
+      { name: 'S-File-MD5', value: digest },
+      { name: 'Check', value: '1' },
+      { name: 'Offset', value: '0' },
+      { name: 'Uuid', value: opts.uuid || uuid() },
+      { name: 'TotalSize', value: String(bytes.length) },
+      { name: 'File', value: gcode, filename: file, type: 'application/octet-stream' }
+    ]);
 
     var url = base + '/uploadFile/upload';
-    return f(url, { method: 'POST', body: form }).then(function (res) {
+    return f(url, {
+      method: 'POST', body: form.body, headers: { 'Content-Type': form.contentType }
+    }).then(function (res) {
       return res.text().then(function (text) {
         if (!res.ok) throw new Error('The printer answered ' + res.status + '.');
         var body = {};

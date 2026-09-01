@@ -1033,17 +1033,11 @@
       else alert(ok ? message : linkName(state.link.kind) + '\n\n' + message);
     }
 
-    // In the app the page cannot reach the network at all — it is served from
-    // an https origin and the printer is on http, which no setting here can
-    // undo. The app makes that one request instead, over the same streaming
-    // path the file save uses.
-    if (window.AndroidSlicer && window.AndroidSlicer.octoSend && state.link.kind === 'octoprint') {
-      window.OrcaOctoResult = function (ok, message) { finished(!!ok, String(message || '')); };
-      if (!streamToAndroid(window.OrcaOctoPrint.fileName(file), gcode, finished)) return;
-      window.AndroidSlicer.octoSend(state.link.url, state.link.key, start);
-      return;
-    }
-
+    // Inside the app every printer request goes out through Java rather than
+    // through the page — a browser is not allowed to talk to a machine that
+    // has not invited it, and printers do not. net.js installs that transport
+    // and the clients below pick it up on their own, so there is one path here
+    // whichever way the request will actually leave.
     var cfg = linkConfig();
     var upload = state.link.kind === 'octoprint'
       ? client.upload(cfg, file, gcode, { print: start, select: true })

@@ -25,6 +25,7 @@ import androidx.webkit.WebViewClientCompat;
 
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -44,6 +45,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Single-activity shell around the browser slicer.
@@ -372,6 +375,42 @@ public class MainActivity extends Activity {
          *
          * Answers asynchronously through window.OrcaOctoResult(ok, message).
          */
+        /**
+         * One HTTP request, made from here rather than from the page.
+         *
+         * A browser will not let a page talk to a printer that has not invited
+         * it, and printers do not invite anyone: OctoPrint ships with
+         * cross-origin requests off, and a printer's own web server has never
+         * heard of them. Worse, the page is served over https from the app's
+         * asset host while the printer is plain http, which is blocked before
+         * CORS is even considered. None of those rules apply out here.
+         *
+         * Answers asynchronously through window.OrcaNetResult, so a slow
+         * printer never freezes the page.
+         */
+        @JavascriptInterface
+        public void httpRequest(final String id, final String method, final String url,
+                                final String headersJson, final String body) {
+            sendRequest(id, method, url, headersJson, body, null);
+        }
+
+        /**
+         * The same, with the body taken from the file the page has already
+         * streamed across in pieces — a G-code upload is megabytes, and a
+         * single bridge call cannot carry that.
+         */
+        @JavascriptInterface
+        public void httpRequestStaged(final String id, final String method, final String url,
+                                      final String headersJson) {
+            final File staged = pendingGcodeFile;
+            closeGcodeStream();
+            if (staged == null || !staged.exists()) {
+                netResult(id, 0, "", "Nothing was staged to send.");
+                return;
+            }
+            sendRequest(id, method, url, headersJson, null, staged);
+        }
+
         @JavascriptInterface
         public void octoSend(final String baseUrl, final String apiKey, final boolean startPrint) {
             final File file = pendingGcodeFile;
@@ -395,6 +434,90 @@ public class MainActivity extends Activity {
                 }
             }, "octoprint-upload").start();
         }
+    }
+
+    /**
+     * Perform one request on a worker thread and hand the answer back to the
+     * page. A printer that refuses, times out or is not there is an answer
+     * too — the page decides what to say about it.
+     */
+    private void sendRequest(final String id, final String method, final String url,
+                             final String headersJson, final String body, final File staged) {
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod(method == null || method.isEmpty() ? "GET" : method);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(60000);
+                conn.setInstanceFollowRedirects(true);
+                for (Map.Entry<String, String> h : parseHeaders(headersJson).entrySet()) {
+                    conn.setRequestProperty(h.getKey(), h.getValue());
+                }
+
+                if (staged != null) {
+                    conn.setDoOutput(true);
+                    conn.setFixedLengthStreamingMode(staged.length());
+                    try (FileInputStream in = new FileInputStream(staged);
+                         OutputStream out = conn.getOutputStream()) {
+                        byte[] buf = new byte[64 * 1024];
+                        int read;
+                        while ((read = in.read(buf)) > 0) out.write(buf, 0, read);
+                        out.flush();
+                    }
+                } else if (body != null && !body.isEmpty()) {
+                    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                    conn.setDoOutput(true);
+                    conn.setFixedLengthStreamingMode(bytes.length);
+                    try (OutputStream out = conn.getOutputStream()) { out.write(bytes); }
+                }
+
+                int status = conn.getResponseCode();
+                InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                netResult(id, status, in == null ? "" : readAll(in), null);
+            } catch (Exception e) {
+                Log.e(TAG, "request to " + url + " failed", e);
+                netResult(id, 0, "", e.getMessage() == null ? e.toString() : e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+                if (staged != null) runOnUiThread(MainActivity.this::discardPendingGcode);
+            }
+        }, "printer-request").start();
+    }
+
+    private Map<String, String> parseHeaders(String json) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (json == null) return out;
+        // Flat {"Name":"value"} only, which is all the page ever sends.
+        Matcher m = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+                .matcher(json);
+        while (m.find()) out.put(unescape(m.group(1)), unescape(m.group(2)));
+        return out;
+    }
+
+    private String unescape(String s) {
+        return s.replace("\\\"", "\"").replace("\\\\", "\\\\")
+                .replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
+    }
+
+    private String readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[16 * 1024];
+        int read;
+        // Enough of an answer to read, not so much that a printer streaming
+        // something enormous can fill memory.
+        while ((read = in.read(chunk)) > 0 && buf.size() < 2 * 1024 * 1024) buf.write(chunk, 0, read);
+        return buf.toString("UTF-8");
+    }
+
+    /** Hand one request's answer back to the page. */
+    private void netResult(final String id, final int status, final String body, final String error) {
+        final String call = "window.OrcaNetResult && window.OrcaNetResult("
+                + jsonString(id) + "," + status + "," + jsonString(body == null ? "" : body) + ","
+                + (error == null ? "null" : jsonString(error)) + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(call, null);
+        });
     }
 
     private void octoResult(final boolean ok, final String message) {
