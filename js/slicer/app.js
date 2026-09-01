@@ -112,6 +112,8 @@
         hint: 'Cross the gap the short way', type: 'bool' },
       { key: 'internalBridges', label: 'Bridge over sparse infill',
         hint: 'The first solid layer spans the gaps below it', type: 'bool' },
+      { key: 'bridgeFlow', label: 'Bridge flow', min: 0.5, max: 1.5, step: 0.05,
+        hint: 'A bridge hangs as a round strand, so it takes nearly twice a flat bead' },
       { key: 'internalBridgeFlow', label: 'Internal bridge flow', min: 0.5, max: 1.5, step: 0.05 }
     ]},
     { title: 'Arc fitting', fields: [

@@ -3324,7 +3324,7 @@
   }
 
   function flowFor(type, s) {
-    if (type === FEATURE.BRIDGE) return 1.0;
+    if (type === FEATURE.BRIDGE) return s.bridgeFlow != null ? s.bridgeFlow : 0.95;
     if (type === FEATURE.INTERNAL_BRIDGE) return s.internalBridgeFlow;
     if (type === FEATURE.IRONING) return s.ironingFlow;
     if (type === FEATURE.SUPPORT || type === FEATURE.SUPPORT_IFACE) return s.flowRatio * 0.9;
@@ -3864,6 +3864,13 @@
         if (scale < 1) speed = Math.max(s.slowDownMinSpeed, speed * scale);
         var flow = flowFor(f.type, s);
         var width = f.type === FEATURE.IRONING ? f.w : f.w;
+        // A bead laid on the layer below is squashed against it and comes out a
+        // rounded rectangle as wide as it was asked for and as tall as the
+        // layer. A bead laid across air is squashed against nothing: it hangs
+        // as a round strand of its own width, which holds nearly twice the
+        // plastic. Extruding the flat figure over a gap is how a bridge comes
+        // out as strings — there was never enough material in it.
+        var beadHeight = f.type === FEATURE.BRIDGE ? width : layer.h;
 
         travelTo(pts[0].X / SCALE, pts[0].Y / SCALE);
 
@@ -3882,7 +3889,7 @@
             for (var si = 1; si < scarf.pts.length; si++) {
               var sw = scarf.widths ? (scarf.widths[si - 1] + scarf.widths[si]) / 2 : width;
               extrudeTo(scarf.pts[si].X / SCALE, scarf.pts[si].Y / SCALE, layer.z,
-                        sw, layer.h, speed, flow * scarf.flows[si]);
+                        sw, beadHeight, speed, flow * scarf.flows[si]);
             }
             continue;
           }
@@ -3896,10 +3903,10 @@
           for (var mi = 0; mi < fitted.length; mi++) {
             var mv = fitted[mi];
             if (mv.type === 'arc') {
-              extrudeArc(mv.to, mv.centre, mv.cw, width, layer.h, speed, flow);
+              extrudeArc(mv.to, mv.centre, mv.cw, width, beadHeight, speed, flow);
               arcCount++;
             } else {
-              extrudeTo(mv.to.X / SCALE, mv.to.Y / SCALE, layer.z, width, layer.h, speed, flow);
+              extrudeTo(mv.to.X / SCALE, mv.to.Y / SCALE, layer.z, width, beadHeight, speed, flow);
             }
           }
           continue;
@@ -3914,7 +3921,7 @@
           }
           // A variable-width bead extrudes the average width of each segment.
           var segWidth = fWidths ? (fWidths[pi - 1] + fWidths[pi]) / 2 : width;
-          extrudeTo(X, Y, zTarget, segWidth, layer.h, speed, flow);
+          extrudeTo(X, Y, zTarget, segWidth, beadHeight, speed, flow);
         }
       }
     }

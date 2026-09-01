@@ -1093,6 +1093,10 @@
 
       bridgeAngleDetection: true,
       internalBridges: true,
+      // A bridge hangs as a round strand rather than a squashed one, so its
+      // section is worked out differently; this is what the vendors trim off
+      // the top of it.
+      bridgeFlow: 0.95,
       internalBridgeFlow: 1.0,
       // Replace runs of tiny segments on a curve with a single G2/G3.
       //
