@@ -769,6 +769,20 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 .sl-readback-rows b { display: block; color: var(--text); font-variant-numeric: tabular-nums; }
 .sl-readback-rows span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
 
+/* The commands a file turned out to need, each one a command the selected
+   machine is known to accept. */
+.sl-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 2px; }
+.sl-chips span {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-active);
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.sl-chips span.vendor { border-color: var(--primary); color: var(--primary-hover); }
+
 .sl-finding {
   border: 1px solid var(--border);
   border-left-width: 3px;

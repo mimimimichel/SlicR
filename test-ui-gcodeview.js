@@ -99,6 +99,19 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
     shown[2].replace(/[^\d]/g, '') === String(Math.round(file.stats.filamentMm)),
     shown[2] + ' vs ' + Math.round(file.stats.filamentMm));
 
+  // The compatibility claim, and it has to be about this file and this machine.
+  ok('the Check tab states what the file is compatible with',
+    await page.locator('#compat').count() === 1);
+  const claim = await page.locator('#compat b').textContent();
+  ok('naming the printer that was selected (' + claim.trim() + ')',
+    /Artillery Sidewinder X2/.test(claim) && /Every command/.test(claim), claim);
+  const chips = await page.locator('#compat .sl-chips span').allTextContents();
+  console.log('  commands: ' + chips.join(' '));
+  ok('listing the commands the body uses, and only those',
+    chips.length > 1 && chips.indexOf('G1') >= 0 &&
+    chips.every(c => new RegExp('^' + c + '\\b', 'm').test(text)),
+    JSON.stringify(chips));
+
   // The preview is the file. Open one that was cut short on the way to the
   // printer — the start script and its priming line, nothing after — which is
   // exactly what a machine that levels, purges and then stops has been given.

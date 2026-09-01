@@ -165,5 +165,91 @@ expectCatch('a downward Z move before homing',
   head.concat(['G1 Z-2 F3000', 'G28'], tail).join('\n'),
   base.settings, 'move.unhomed', 'error');
 
+// --- the file may only speak what the machine is known to understand -------
+// G2/G3 needs ARC_SUPPORT compiled into Marlin and a [gcode_arcs] section in
+// Klipper; M420 needs bed levelling; M900 needs linear advance; M200 needs
+// volumetric extrusion. A printer without one of them does not skip the line,
+// it stops the print. So the body may only use what both firmware families
+// implement, plus whatever this machine's own scripts already use.
+console.log('\n=== 12. only commands this machine is known to accept ===');
+
+var vocabHead = ['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200', 'G28'];
+var vocabTail = ['M104 S0', 'M140 S0', 'M84'];
+function bodyWith(line, settings) {
+  return vocabHead.concat([';LAYER_CHANGE', ';LAYER:0', ';Z:0.2',
+    'G1 Z0.2 F600', 'G1 X100 Y100 E1 F1200', line, 'G1 X110 Y100 E2 F1200',
+    ';END_GCODE'], vocabTail).join('\n');
+}
+var x2 = P.buildSettings('artillery_x2', 'pla', 'q020');
+
+// M900 is linear advance, M73 a progress report, M201 a machine limit, M572
+// pressure advance on Duet, SET_PRESSURE_ADVANCE the Klipper spelling of it.
+// Every one is optional on the firmware that has it at all — and the X2's own
+// scripts ask for none of them.
+['M900 K0.05', 'M73 P50', 'M201 X500', 'M572 D0 S0.05', 'M486 S0',
+ 'SET_PRESSURE_ADVANCE ADVANCE=0.05']
+  .forEach(function (line) {
+    expectCatch('a body that uses ' + line.split(' ')[0],
+      bodyWith(line, x2), x2, 'command.unsupported', 'error');
+  });
+
+// But M420 is in the X2's own start script — its bed mesh is switched on
+// there — so the machine plainly knows it.
+var known = C.verify(bodyWith('M420 S1', x2), x2);
+if (known.findings.some(function (f) { return f.code === 'command.unsupported'; })) {
+  fail++; console.log('  FALSE ALARM: M420 rejected on a machine whose own script uses it');
+} else { pass++; console.log('  ok      M420 passes on the X2, whose start script switches its mesh on'); }
+
+// The plain commands both firmware families implement are never questioned.
+var plain = C.verify(bodyWith('M204 S800', x2), x2);
+if (plain.findings.some(function (f) { return f.code === 'command.unsupported'; })) {
+  fail++; console.log('  FALSE ALARM: M204 reported as unsupported');
+} else { pass++; console.log('  ok      M204, M106, M104 and the rest of the core pass'); }
+
+// A machine that is sent M6211 by its own manufacturer plainly knows M6211.
+var cc2 = P.buildSettings('centauri_carbon_2', 'pla', 'q020');
+var vendorOwn = C.verify(bodyWith('M6211 A1 L200 T0 Q215 R215 S215', cc2), cc2);
+if (vendorOwn.findings.some(function (f) { return f.code === 'command.unsupported'; })) {
+  fail++; console.log('  FALSE ALARM: a command from the machine\'s own start script was rejected');
+} else { pass++; console.log('  ok      a command the machine\'s own scripts use is allowed in the body'); }
+
+// And editing the start script widens the vocabulary the moment it is edited.
+var edited = P.buildSettings('artillery_x2', 'pla', 'q020');
+edited.startGcode = edited.startGcode + '\nM900 K0.12 ; linear advance';
+var afterEdit = C.verify(bodyWith('M900 K0.05', edited), edited);
+if (afterEdit.findings.some(function (f) { return f.code === 'command.unsupported'; })) {
+  fail++; console.log('  FALSE ALARM: M900 still rejected after the start script was told about it');
+} else { pass++; console.log('  ok      a start script that uses a command permits it in the body too'); }
+
+// The report says what the file needed, and where each command is known.
+var listed = C.verify(bodyWith('M204 S800', x2), x2).summary.commands;
+var names = listed.map(function (c) { return c.command; }).join(' ');
+if (/G1/.test(names) && /M204/.test(names) &&
+    listed.every(function (c) { return !!c.known; })) {
+  pass++; console.log('  ok      the report lists every command the body used (' + names + ')');
+} else { fail++; console.log('  MISSED  command list: ' + JSON.stringify(listed)); }
+
+// Every profile, every feature: the whole catalogue has to stay inside its
+// own vocabulary. This is the promise, checked rather than asserted.
+var outside = [];
+Object.keys(P.PRINTERS).forEach(function (k) {
+  var s = P.buildSettings(k, 'pla', 'q020');
+  s.supportEnable = true; s.ironing = 'top'; s.adhesion = 'brim'; s.gapFill = true;
+  s.wallGenerator = 'arachne'; s.seamScarf = true; s.monotonicSurfaces = 'all';
+  s.internalBridges = true; s.arcFitting = true;
+  var pr = P.PRINTERS[k];
+  var mesh = box(pr.bed.x / 2, pr.bed.y / 2, Math.min(20, pr.bed.x * 0.3), 6);
+  var g = E.slice({ positions: mesh, settings: s }, function () {}).gcode;
+  var v = C.verify(g, s);
+  v.findings.forEach(function (f) {
+    if (f.code === 'command.unsupported' || f.code === 'arc.unsupported') {
+      outside.push(k + ': ' + f.message);
+    }
+  });
+});
+if (!outside.length) { pass++; console.log('  ok      all ' + Object.keys(P.PRINTERS).length +
+  ' machines produce a file inside their own vocabulary, every feature on'); }
+else { fail++; console.log('  MISSED  ' + outside.length + ' outside: ' + outside.slice(0, 3).join(' | ')); }
+
 console.log('\n'+pass+' passed, '+fail+' failed');
 process.exit(fail?1:0);

@@ -42,6 +42,57 @@
     M42:  [WARN,  'A pin is being set directly']
   };
 
+  /**
+   * What the body of a print file is allowed to say.
+   *
+   * Every command here is implemented by both Marlin and Klipper, so a file
+   * built out of them runs on either without asking which. Anything beyond it
+   * is optional somewhere: G2/G3 needs ARC_SUPPORT compiled into Marlin and a
+   * [gcode_arcs] section in Klipper, M420 needs bed levelling, M900 needs
+   * linear advance, M200 needs volumetric extrusion — and a printer that has
+   * not got the option does not ignore the command, it stops the print.
+   *
+   * A machine's own start, end, layer and tool-change scripts are its own
+   * business and add to this list: a printer that is sent M6211 by its
+   * manufacturer plainly knows M6211.
+   */
+  var CORE_COMMANDS = ('G0 G1 G4 G28 G90 G91 G92 ' +
+    'M82 M83 M84 M104 M105 M106 M107 M109 M140 M190 M204 M220 M221 M400').split(' ');
+
+  /** Arcs, allowed unless this machine's vendor says otherwise. */
+  var ARC_COMMANDS = ['G2', 'G3'];
+
+  /**
+   * The vocabulary for one machine: the core, plus every command its own
+   * scripts use. Read from the scripts in force, not from the profile they
+   * came from, so an edited start script widens the vocabulary the moment it
+   * is edited.
+   */
+  function vocabulary(s) {
+    var allowed = Object.create(null);
+    var i;
+    for (i = 0; i < CORE_COMMANDS.length; i++) allowed[CORE_COMMANDS[i]] = 'every printer';
+    for (i = 0; i < ARC_COMMANDS.length; i++) allowed[ARC_COMMANDS[i]] = 'arc moves';
+
+    var scripts = [s.startGcode, s.endGcode, s.layerGcode, s.toolChangeGcode];
+    for (i = 0; i < scripts.length; i++) {
+      if (!scripts[i]) continue;
+      var lines = String(scripts[i]).split('\n');
+      for (var L = 0; L < lines.length; L++) {
+        var line = lines[L].trim();
+        if (!line || line.charCodeAt(0) === 59 || line.charCodeAt(0) === 123) continue;
+        var m = /^([A-Za-z][A-Za-z0-9_]*)/.exec(line);
+        if (!m) continue;
+        var name = m[1].toUpperCase();
+        // G-codes are named canonically: G01 and G1 are the same command.
+        var code = /^([GM])0*(\d+)$/.exec(name);
+        if (code) name = code[1] + code[2];
+        if (!allowed[name]) allowed[name] = 'this machine\u2019s own scripts';
+      }
+    }
+    return allowed;
+  }
+
   var MIN_EXTRUDE_TEMP = 160;   // below this, filament does not melt, it jams
 
   /**
@@ -174,6 +225,8 @@
 
     var counts = { moves: 0, extrusions: 0 };
     var seen = {};              // report each dangerous code once
+    var allowed = vocabulary(s);
+    var usedInBody = {};        // what the body turned out to need
     var capped = {};            // and cap repetitive geometry findings
     var CAP = 5;
 
@@ -282,6 +335,7 @@
       }
       if (p.macro) {
         st.macroSeen = true;
+        noteCommand(p.macro.toUpperCase(), lineNo, raw);
         // Klipper's SET_KINEMATIC_POSITION moves the coordinate system rather
         // than the head: the machine is told it is somewhere else, and stays
         // exactly where it was. Follow it, or every later move in that script
@@ -321,6 +375,8 @@
 
       var w = p.words;
       var cmd = p.cmd;
+
+      noteCommand(cmd, lineNo, raw);
 
       if (DANGEROUS[cmd] && !seen[cmd]) {
         seen[cmd] = true;
@@ -473,9 +529,31 @@
         filamentMm: Math.round(st.totalE),
         nozzleTemp: st.peakNozzle,
         bedTemp: st.peakBed,
-        usedMacros: st.macroSeen
+        usedMacros: st.macroSeen,
+        // Every command the body of this file uses, and where each one is
+        // known to be understood. This is the compatibility claim, written out.
+        commands: Object.keys(usedInBody).sort().map(function (c) {
+          return { command: c, known: usedInBody[c] };
+        })
       }
     };
+
+    /**
+     * Every command in the body has to be one this machine is known to accept.
+     * The start and end scripts are the machine's own and are left alone.
+     */
+    function noteCommand(name, lineNo, raw) {
+      if (!st.inBody || st.inEnd) return;
+      if (allowed[name]) { usedInBody[name] = allowed[name]; return; }
+      if (seen['vocab.' + name]) return;
+      seen['vocab.' + name] = true;
+      add(ERROR, 'command.unsupported',
+        name + ' is not a command this printer is known to accept',
+        lineNo, raw,
+        'The file may only use what every Marlin and Klipper machine implements, ' +
+        'plus whatever this machine\u2019s own start, end and layer scripts already use. ' +
+        'A printer without ' + name + ' does not skip the line — it stops the print.');
+    }
 
     // ----- move handling -----------------------------------------------------
 

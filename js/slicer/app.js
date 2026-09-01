@@ -1366,6 +1366,7 @@
     }
 
     renderReadBack(body);
+    renderCompatibility(body);
 
     var order = { error: 0, warning: 1, info: 2 };
     var findings = report.findings.slice().sort(function (a, b) {
@@ -1407,6 +1408,53 @@
       }
       body.appendChild(card);
     });
+  }
+
+  /**
+   * The compatibility claim, written out: every command the body of this file
+   * uses, and the fact that each one is a command this machine accepts. The
+   * verifier refuses to let anything else out, so this is a statement of what
+   * was checked rather than a promise.
+   */
+  function renderCompatibility(body) {
+    var report = state.result && state.result.report;
+    var used = report && report.summary && report.summary.commands;
+    if (!used || !used.length) return;
+
+    var refused = report.findings.filter(function (f) {
+      return f.code === 'command.unsupported' || f.code === 'arc.unsupported';
+    });
+
+    var box = document.createElement('div');
+    box.className = 'sl-readback' + (refused.length ? ' empty' : '');
+    box.id = 'compat';
+    var head = document.createElement('b');
+    var machine = (P.PRINTERS[state.settings.printerKey] || {}).name || 'this printer';
+    head.textContent = refused.length
+      ? 'Not every command here is one the ' + machine + ' accepts'
+      : 'Every command in this file is one the ' + machine + ' accepts';
+    box.appendChild(head);
+
+    var row = document.createElement('div');
+    row.className = 'sl-chips';
+    used.forEach(function (c) {
+      var chip = document.createElement('span');
+      chip.textContent = c.command;
+      chip.title = c.command + ' — understood by ' + c.known;
+      if (/own scripts/.test(c.known)) chip.className = 'vendor';
+      row.appendChild(chip);
+    });
+    box.appendChild(row);
+
+    var note = document.createElement('div');
+    note.className = 'why';
+    note.textContent = refused.length
+      ? refused[0].message + '.'
+      : 'The body may only use what both Marlin and Klipper implement, plus whatever ' +
+        'this machine\u2019s own start, end and layer scripts already use — those are ' +
+        'marked. Anything else is refused before it can be exported.';
+    box.appendChild(note);
+    body.appendChild(box);
   }
 
   /**
