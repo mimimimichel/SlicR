@@ -5,6 +5,8 @@
  *   node test-ui-advice.js
  */
 const { chromium } = require('playwright');
+
+const APP = process.env.APP || 'http://localhost:8099/index.html';
 (async () => {
   const browser = await chromium.launch({
     executablePath: process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
@@ -21,7 +23,7 @@ const { chromium } = require('playwright');
   };
   const items = () => page.locator('.sl-advice-item');
 
-  await page.goto('http://localhost:8099/index.html');
+  await page.goto(APP);
   await page.waitForSelector('#btn-slice');
   await page.click('#btn-panel').catch(() => {});
   await page.waitForTimeout(300);
@@ -55,7 +57,7 @@ const { chromium } = require('playwright');
   ok('dismissing removes one note (' + beforeDismiss + ' → ' + await items().count() + ')',
     await items().count() === beforeDismiss - 1);
 
-  await page.reload();
+  await page.goto(APP);
   await page.waitForSelector('#btn-slice');
   await page.click('[data-demo="pyramid"]');
   await page.waitForFunction(() => !document.getElementById('btn-slice').disabled);
