@@ -147,8 +147,12 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   await page.setInputFiles('#file-input', out);
   await page.waitForTimeout(2000);
   const reopened = await lit();
+  // The camera has to come down to the print. A file opened on its own has no
+  // model behind it, and sitting back to look at the whole plate leaves a
+  // 20 mm part as a speck. It frames a little wider than the sliced model did,
+  // because the skirt is part of the file and the model was not.
   ok('opening the whole file again fills the screen (' + reopened + ' px)',
-    reopened > drawn / 2, drawn + ' → ' + reopened);
+    reopened > drawn * 0.35, drawn + ' → ' + reopened);
   await page.click('#btn-panel').catch(() => {});
   await page.waitForTimeout(200);
   await page.click('[data-tab="check"]');

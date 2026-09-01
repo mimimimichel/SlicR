@@ -199,6 +199,7 @@
   // --- Models -----------------------------------------------------------------
 
   Viewer.prototype.addModel = function (positions, name) {
+    this._framed = null;
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions.slice(), 3));
     geo.computeVertexNormals();
@@ -721,6 +722,9 @@
       box.expandByObject(this.models[i].mesh);
       found = true;
     }
+    // Nothing on the plate, but something on screen: a G-code file opened on
+    // its own. Keep looking at that rather than jumping back to the whole bed.
+    if (!found && this._framed) { this.frameBox(this._framed); return; }
     if (!found || box.isEmpty()) {
       this.target.set(this.bed.x / 2, this.bed.y / 2, this.bed.z * 0.12);
       this.spherical.radius = Math.max(this.bed.x, this.bed.y) * 1.8;
@@ -734,6 +738,23 @@
     var fov = this.camera.fov * Math.PI / 180;
     var fit = (extent * 0.95) / Math.tan(fov / 2);
     this.spherical.radius = Math.max(extent * 1.6, fit);
+    this.updateCamera();
+  };
+
+  /**
+   * Point the camera at a box given in printer coordinates, and remember it.
+   * A G-code file opened for inspection has no model behind it, and a 30 mm
+   * part in the middle of a 300 mm bed is a speck until the camera comes down
+   * to it — so the caller works the box out from the file and says so here.
+   */
+  Viewer.prototype.frameBox = function (box) {
+    if (!box) return;
+    this._framed = box;
+    this.target.set((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2,
+                    (box.minZ + box.maxZ) / 2);
+    var extent = Math.max(box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ, 5);
+    var fov = this.camera.fov * Math.PI / 180;
+    this.spherical.radius = Math.max(extent * 1.6, (extent * 0.95) / Math.tan(fov / 2));
     this.updateCamera();
   };
 

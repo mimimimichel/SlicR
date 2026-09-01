@@ -2063,7 +2063,7 @@
       updateSendButton();
       el('tool-preview').disabled = false;
       refreshEmpty();
-      state.viewer.frameObjects();
+      state.viewer.frameBox(printedBox(read.layers));
       renderPanel();
 
       if (!read.stats.segments) {
@@ -2076,6 +2076,30 @@
       hideProgress();
       alert('Could not read ' + file.name + '\n\n' + (err.message || err));
     }
+  }
+
+  /**
+   * Where the part is, for pointing the camera at it. The first layer is left
+   * out when there is more than one: the machine's own priming line lives
+   * there, off at the front edge of the plate, and framing it would push the
+   * part into a corner of the screen.
+   */
+  function printedBox(layers) {
+    var from = layers.length > 2 ? 1 : 0;
+    var box = { minX: Infinity, minY: Infinity, minZ: Infinity,
+                maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity };
+    for (var i = from; i < layers.length; i++) {
+      var l = layers[i];
+      for (var k = 0; k < l.pts.length; k += 2) {
+        if (l.pts[k] < box.minX) box.minX = l.pts[k];
+        if (l.pts[k] > box.maxX) box.maxX = l.pts[k];
+        if (l.pts[k + 1] < box.minY) box.minY = l.pts[k + 1];
+        if (l.pts[k + 1] > box.maxY) box.maxY = l.pts[k + 1];
+      }
+      if (l.z < box.minZ) box.minZ = l.z;
+      if (l.z > box.maxZ) box.maxZ = l.z;
+    }
+    return isFinite(box.minX) ? box : null;
   }
 
   /** The numbers for a file that was opened rather than sliced here. */

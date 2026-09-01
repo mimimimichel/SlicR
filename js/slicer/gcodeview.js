@@ -75,18 +75,18 @@
     // way a vase spiral comes out as layers rather than as one turn each. A
     // file that says nothing gets its layers from the Z it prints at.
     var sawLayerComment = false, pendingLayer = false;
+    // Most slicers say what each layer's height is. Believed when present.
+    var pendingHeight = 0;
 
     function startLayer(atZ) {
-      var previous = current;
-      current = { z: atZ, h: 0.2, feats: [] };
-      if (previous) {
-        var rise = atZ - previous.z;
-        if (rise > 0.01 && rise < 2) current.h = rise;
-        else current.h = previous.h;
-      } else if (atZ > 0.01 && atZ < 2) {
-        current.h = atZ;
-      }
+      // The height is left open here. Guessing it from the rise off the layer
+      // before is wrong exactly where it matters most: the first printed layer
+      // sits a fraction above the priming line, and a height of 0.03 mm makes
+      // every line on it look eight times too fat. It is settled once the whole
+      // file has been read — see resolveHeights.
+      current = { z: atZ, h: 0, declaredH: pendingHeight, feats: [] };
       layers.push(current);
+      pendingHeight = 0;
       run = null;
       pendingLayer = false;
     }
@@ -98,20 +98,15 @@
       var length = Math.hypot(nx - x, ny - y);
       if (length < 1e-9) return;
 
-      // The width is measured, not assumed: the filament that went in, spread
-      // over the distance travelled at this layer's height. An over-extruding
-      // file therefore looks fat on screen, which is the point of looking.
-      var h = current.h;
-      var width = volumeMm > 0 && h > 0 ? (volumeMm * filamentArea) / (length * h) : 0;
-      width = Math.max(0.05, Math.min(width, 5));
-
+      // What went in and how far it was spread. The width follows once the
+      // layer's height is known, which is not yet.
       if (!run) {
-        run = { type: type, pts: [x, y], widths: [width] };
+        run = { type: type, pts: [x, y], vols: [0], lens: [0] };
         current.feats.push(run);
       }
       run.pts.push(nx, ny);
-      run.widths.push(width);
-      run.widths[0] = run.widths[0] || width;
+      run.vols.push(volumeMm);
+      run.lens.push(length);
       segments++;
       if (nx < minX) minX = nx;
       if (nx > maxX) maxX = nx;
@@ -134,6 +129,9 @@
         } else if (/^;\s*(LAYER_CHANGE|LAYER\s*:|CHANGE_LAYER)/i.test(raw)) {
           sawLayerComment = true;
           pendingLayer = true;
+        } else {
+          var hh = /^;\s*HEIGHT\s*:\s*([\d.]+)/i.exec(raw);
+          if (hh) pendingHeight = parseFloat(hh[1]);
         }
         continue;
       }
@@ -218,8 +216,9 @@
       }
     }
 
+    resolveHeights(layers);
     return {
-      layers: layers.map(pack),
+      layers: layers.map(function (l) { return pack(l, filamentArea); }),
       header: header,
       stats: {
         segments: segments,
@@ -230,6 +229,32 @@
       },
       truncated: truncated
     };
+  }
+
+  /**
+   * How thick each layer is. Taken from the file where it says so, and
+   * otherwise from the step between layers — but from the usual step, not the
+   * one immediately before, because the first printed layer often sits a
+   * fraction of a millimetre above a priming line and would otherwise be read
+   * as a layer three hundredths of a millimetre thick.
+   */
+  function resolveHeights(layers) {
+    var rises = [];
+    for (var i = 1; i < layers.length; i++) {
+      var d = layers[i].z - layers[i - 1].z;
+      if (d > 0.01 && d < 2) rises.push(d);
+    }
+    rises.sort(function (a, b) { return a - b; });
+    var usual = rises.length ? rises[Math.floor(rises.length / 2)] : 0.2;
+
+    for (i = 0; i < layers.length; i++) {
+      var l = layers[i];
+      if (l.declaredH > 0.01 && l.declaredH < 2) { l.h = l.declaredH; continue; }
+      var rise = i > 0 ? l.z - layers[i - 1].z : l.z;
+      // A step nothing like the usual one says more about what came before it
+      // than about this layer.
+      l.h = (rise > usual * 0.4 && rise < usual * 2.5) ? rise : usual;
+    }
   }
 
   /** The parameters on one line, as numbers. */
@@ -305,10 +330,10 @@
   }
 
   /** The shape the viewer draws: flat typed arrays, one entry per layer. */
-  function pack(layer) {
+  function pack(layer, filamentArea) {
     var feats = layer.feats, i, f;
     var nPts = 0;
-    for (f = 0; f < feats.length; f++) nPts += feats[f].widths.length;
+    for (f = 0; f < feats.length; f++) nPts += feats[f].vols.length;
 
     var pts = new Float32Array(nPts * 2);
     var pointWidths = new Float32Array(nPts);
@@ -317,18 +342,28 @@
     var widths = new Float32Array(feats.length);
 
     var cursor = 0;
+    var h = layer.h > 0 ? layer.h : 0.2;
     for (f = 0; f < feats.length; f++) {
       offsets[f] = cursor;
       types[f] = feats[f].type;
       var sum = 0;
-      for (i = 0; i < feats[f].widths.length; i++) {
+      for (i = 0; i < feats[f].vols.length; i++) {
+        // Measured, not assumed: the filament that went in, spread over the
+        // distance travelled, at this layer's height. An over-extruding file
+        // therefore looks fat on screen, which is the point of looking.
+        var w = feats[f].lens[i] > 0
+          ? (feats[f].vols[i] * filamentArea) / (feats[f].lens[i] * h) : 0;
+        w = Math.max(0.05, Math.min(w, 5));
         pts[cursor * 2] = feats[f].pts[i * 2];
         pts[cursor * 2 + 1] = feats[f].pts[i * 2 + 1];
-        pointWidths[cursor] = feats[f].widths[i];
-        sum += feats[f].widths[i];
+        pointWidths[cursor] = i === 0 ? 0 : w;
+        sum += i === 0 ? 0 : w;
         cursor++;
       }
-      widths[f] = feats[f].widths.length ? sum / feats[f].widths.length : 0.4;
+      var n = feats[f].vols.length - 1;
+      widths[f] = n > 0 ? sum / n : 0.4;
+      // The point a run starts from is drawn as wide as the line leaving it.
+      if (feats[f].vols.length > 1) pointWidths[offsets[f]] = pointWidths[offsets[f] + 1];
     }
     offsets[feats.length] = cursor;
     return { z: layer.z, h: layer.h, pts: pts, pointWidths: pointWidths,
