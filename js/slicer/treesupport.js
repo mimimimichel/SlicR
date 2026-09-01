@@ -113,7 +113,13 @@
     // stops a millimetre short of what it is meant to be holding.
     var seedArea = Math.pow(lineW * 2, 2);
     var minArea = Math.PI * tipR * tipR * 0.5;
-    var gapLayers = Math.max(1, Math.round(s.supportZGap / s.layerHeight));
+    // A tip seeded under the layer it holds is skipped for this many layers
+    // before it is first drawn. Skipping one puts the top of the branch level
+    // with the underside of the overhang — touching it, which is a support
+    // welded to the part and cut off rather than lifted off. One more than
+    // that leaves the gap the setting asks for, and matches what the normal
+    // supports leave.
+    var gapLayers = Math.max(1, Math.round(s.supportZGap / s.layerHeight)) + 1;
 
     var nodes = [];
 

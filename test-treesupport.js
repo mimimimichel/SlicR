@@ -155,5 +155,35 @@ var bScan = supportScan(blocked.gcode, sTree);
 chk('a blocker still removes tree branches', bScan.vol < tScan.vol * 0.9,
     bScan.vol.toFixed(1) + ' vs ' + tScan.vol.toFixed(1) + ' mm3');
 
+// --- the gap under the part, which is the whole point of a support ---
+// A branch whose top is level with the underside of the overhang is printed
+// into it: it has to be cut off rather than lifted off, and it tears the
+// surface on the way. Both kinds of support have to leave the same air, and
+// as much of it as the setting asks for.
+function tShape(w, d, h, cx, cy) {
+  return new Float32Array(box(8, 8, 12, cx, cy, 0).concat(box(w, d, h, cx, cy, 12)));
+}
+function gapUnderCap(style, want) {
+  var s = settings({ supportEnable: true, supportStyle: style, supportZGap: want });
+  var g = E.slice({ positions: tShape(30, 20, 3, 150, 150), settings: s }, function () {}).gcode;
+  var lines = g.split('\n'), z = 0, type = '', topSupport = -1;
+  for (var i = 0; i < lines.length; i++) {
+    var m = /^;Z:([\d.]+)/.exec(lines[i]); if (m) z = parseFloat(m[1]);
+    var t = /^;\s*TYPE:(.*)$/i.exec(lines[i]); if (t) type = t[1].trim().toLowerCase();
+    if (/^G1 .*E/.test(lines[i]) && /support/.test(type) && z > topSupport) topSupport = z;
+  }
+  // The cap sits on top of the 12 mm post, so its underside is at 12 — plus
+  // the sliver the layer plan puts it on.
+  var underside = 12.05;
+  return Math.round((underside - topSupport) * 100) / 100;
+}
+[0.2, 0.4, 0.6].forEach(function (want) {
+  var normalGap = gapUnderCap('normal', want), treeGap = gapUnderCap('tree', want);
+  chk('normal support leaves the ' + want + ' mm it was asked for (' + normalGap + ')',
+          Math.abs(normalGap - want) < 0.05, '');
+  chk('and a tree leaves the same (' + treeGap + ')',
+          Math.abs(treeGap - want) < 0.05, '');
+});
+
 console.log(fails ? '\n' + fails + ' FAILURES' : '\nall tree support checks pass');
 process.exit(fails ? 1 : 0);
