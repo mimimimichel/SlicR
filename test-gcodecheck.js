@@ -182,16 +182,28 @@ function bodyWith(line, settings) {
 }
 var x2 = P.buildSettings('artillery_x2', 'pla', 'q020');
 
-// M900 is linear advance, M73 a progress report, M201 a machine limit, M572
-// pressure advance on Duet, SET_PRESSURE_ADVANCE the Klipper spelling of it.
-// Every one is optional on the firmware that has it at all — and the X2's own
-// scripts ask for none of them.
-['M900 K0.05', 'M73 P50', 'M201 X500', 'M572 D0 S0.05', 'M486 S0',
+// M73 is a progress report, M201 a machine limit, M572 pressure advance on
+// Duet, SET_PRESSURE_ADVANCE the Klipper spelling of it. Every one is optional
+// on the firmware that has it at all — and the X2's own scripts ask for none
+// of them.
+['M73 P50', 'M201 X500', 'M572 D0 S0.05', 'M486 S0',
  'SET_PRESSURE_ADVANCE ADVANCE=0.05']
   .forEach(function (line) {
     expectCatch('a body that uses ' + line.split(' ')[0],
       bodyWith(line, x2), x2, 'command.unsupported', 'error');
   });
+
+// M900 is linear advance, and the X1 is the machine to ask it of: Artillery
+// publishes a K value for the X2 and none for the X1, so the same family
+// answers differently — which is the whole point of reading the vocabulary
+// from the machine's own scripts rather than from a list.
+var x1 = P.buildSettings('artillery_x1', 'pla', 'q020');
+expectCatch('a body that uses M900 on a machine with no published K',
+  bodyWith('M900 K0.05', x1), x1, 'command.unsupported', 'error');
+var vendorK = C.verify(bodyWith('M900 K0.12', x2), x2);
+if (vendorK.findings.some(function (f) { return f.code === 'command.unsupported'; })) {
+  fail++; console.log('  FALSE ALARM: M900 rejected on the X2, whose vendor sets K0.12');
+} else { pass++; console.log('  ok      M900 passes on the X2, whose vendor publishes a K value'); }
 
 // But M420 is in the X2's own start script — its bed mesh is switched on
 // there — so the machine plainly knows it.

@@ -1499,8 +1499,18 @@
         z: printZ,
         h: layerPlan[Li].height,
         feats: feats,
-        // Kept for the writer's combing test, dropped before the layers are packed.
-        comb: s.combing ? G.offsetPaths(regions[Li], -wl.ext * 0.6) : null
+        // What this layer covers. Read by the prime tower, which has to know
+        // where the parts are before it can stand anywhere else. Dropped
+        // before the layers are packed.
+        region: regions[Li],
+        // Where the nozzle may travel without retracting, when that is asked
+        // for: only where it would actually run over plastic, so the walls and
+        // the solid areas. The sparse interior is mostly air, and a travel
+        // across it with the pressure still on drips into the cavity and comes
+        // out of the far side as a string.
+        comb: s.combing
+          ? G.subtract(G.offsetPaths(regions[Li], -wl.ext * 0.6), sparseRegion[Li] || [])
+          : null
       };
       if ((Li & 3) === 0) progress(0.53 + 0.30 * (Li / n), 'Generating toolpaths');
     }
@@ -1884,9 +1894,11 @@
         minZ = Math.min(minZ, mBuilt.minZ);
         maxZ = Math.max(maxZ, mBuilt.maxZ);
         for (var ml = 0; ml < mBuilt.layers.length; ml++) {
-          if (mBuilt.layers[ml].comb && mBuilt.layers[ml].comb.length) {
-            footprints = G.unite(footprints, mBuilt.layers[ml].comb);
-          }
+          // The outline, never the combing region: where the tower may stand
+          // is a fact about the plate, and must not change because somebody
+          // switched a travel setting off.
+          var foot = mBuilt.layers[ml].region;
+          if (foot && foot.length) footprints = G.unite(footprints, foot);
         }
       }
       outLayers = interleaveObjects(built, s);
@@ -1902,7 +1914,7 @@
 
     progress(0.85, 'Writing G-code');
     var gcode = generateGcode(outLayers, s);
-    for (var c = 0; c < outLayers.length; c++) outLayers[c].comb = null;
+    for (var c = 0; c < outLayers.length; c++) { outLayers[c].comb = null; outLayers[c].region = null; }
 
     progress(0.95, 'Verifying G-code');
     var report = verifyOutput(gcode.text, s);

@@ -564,6 +564,25 @@
     var zSpeed = opts.maxZSpeed || 12;
     var zFeed = Math.round(Math.min(opts.travel || 200, zSpeed) * 60);
     var primeX = Math.round(bx * 0.4);
+
+    // Linear advance, where the machine's own vendor sets a value for it.
+    //
+    // Marlin's LIN_ADVANCE holds the pressure in the melt chamber steady as the
+    // head speeds up and slows down. Without it the nozzle keeps pushing into a
+    // corner it has already reached and leaves a blob there, then starts the
+    // next line short. It is per-machine and per-hotend, and guessing it is
+    // worse than leaving it off — so this is only ever the number the vendor
+    // publishes for that exact machine, and nothing is emitted otherwise.
+    if (opts.linearAdvance != null) {
+      var setup = 'M900 K' + opts.linearAdvance + ' ; linear advance, the value ' +
+        brand + ' publishes for this machine';
+      start = /^M8[23]\b.*$/m.test(start)
+        ? start.replace(/^(M8[23]\b.*)$/m, '$1\n' + setup)
+        : (/^G90\b.*$/m.test(start)
+          ? start.replace(/^(G90\b.*)$/m, '$1\n' + setup)
+          : setup + '\n' + start);
+    }
+
     return {
       name: name,
       brand: brand,
@@ -724,7 +743,8 @@
     anycubic_kobra2: printer('Anycubic Kobra 2 / Neo', 'Anycubic', 220, 220, 250,
       { accel: 2500, travel: 200, retract: 1.5, start: 'mesh' }),
     anycubic_kobra3: printer('Anycubic Kobra 3', 'Anycubic', 255, 255, 260,
-      { accel: 6000, travel: 300, retract: 1.0, start: 'mesh', maxSpeed: 500 }),
+      { accel: 6000, travel: 300, retract: 1.0, linearAdvance: 0.051,
+        start: 'mesh', maxSpeed: 500 }),
 
     // --- Sovol ---
     sovol_sv06: printer('Sovol SV06', 'Sovol', 220, 220, 250,
@@ -766,7 +786,7 @@
       { accel: 1000, travel: 120, retract: 1.5, zHop: 0,
         start: 'artillery', end: 'artillery' }),
     artillery_x2: printer('Artillery Sidewinder X2', 'Artillery', 300, 300, 400,
-      { accel: 1500, travel: 150, retract: 1.5,
+      { accel: 1500, travel: 150, retract: 1.5, linearAdvance: 0.12,
         start: 'artillery', end: 'artillery', abl: true }),
     artillery_x3: printer('Artillery Sidewinder X3 Plus', 'Artillery', 300, 305, 400,
       { accel: 3000, travel: 200, retract: 1.2, maxSpeed: 300,
@@ -1062,7 +1082,12 @@
       raftGap: 0.2,
 
       // --- Travel ---
-      combing: true,
+      // Skipping the retraction when the travel keeps the nozzle over plastic
+      // saves time, and every reference slicer ships it off: over sparse infill
+      // the nozzle is really over air, and over solid it draws a line across
+      // the surface it just laid. Off, the nozzle retracts whenever it travels
+      // further than the distance below, which is what stops stringing.
+      combing: false,
       minTravelForRetract: 1.5,
       wipeOnRetract: true,
       wipeDistance: 2,

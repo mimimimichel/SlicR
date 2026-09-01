@@ -149,6 +149,20 @@ chk('no room for the tower is reported as an error',
     crowded.report.findings.filter(function(f){return f.severity==='error';})
       .map(function(f){return f.code;}).join(',') || 'nothing');
 
+// Where the tower may stand is a fact about the plate. It once read the
+// combing region for it, so switching a travel setting off left the tower
+// thinking the plate was empty and it stood on the model.
+[true, false].forEach(function (combing) {
+  var same = E.slice({
+    positions: merge([big1, big2]),
+    objects: [{ name:'one', positions:big1, extruder:0 }, { name:'two', positions:big2, extruder:1 }],
+    settings: settings({ primeTowerWidth: 100, combing: combing })
+  }, function(){});
+  chk('a full plate has no room for a tower with combing ' + (combing ? 'on' : 'off'),
+      same.report.findings.some(function (f) { return f.code === 'primetower.nospace'; }),
+      same.report.findings.map(function (f) { return f.code; }).join(',') || 'nothing reported');
+});
+
 // --- the purge rule has to fire when it is broken ---
 // Strip the prime tower out of a good file: the same plate, now printing on
 // the model straight after a tool change.

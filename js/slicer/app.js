@@ -193,7 +193,8 @@
       { key: 'deretractSpeed', label: 'Deretraction speed', unit: 'mm/s', min: 5, max: 120, step: 1 },
       { key: 'zHop', label: 'Z hop', unit: 'mm', min: 0, max: 2, step: 0.05 },
       { key: 'minTravelForRetract', label: 'Min travel to retract', unit: 'mm', min: 0, max: 20, step: 0.5 },
-      { key: 'combing', label: 'Avoid retraction inside the part', type: 'bool' },
+      { key: 'combing', label: 'Skip retraction over plastic', type: 'bool',
+        hint: 'Faster, at the price of stringing — off is what every reference slicer does' },
       { key: 'wipeOnRetract', label: 'Wipe on retract', type: 'bool' },
       { key: 'wipeDistance', label: 'Wipe distance', unit: 'mm', min: 0, max: 5, step: 0.5 },
       { key: 'spiralVase', label: 'Spiral vase mode', hint: 'Single wall, no top, continuous Z', type: 'bool' }
