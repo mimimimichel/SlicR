@@ -842,9 +842,13 @@
         }
       } else if (pointers.size === 2) {
         var p = positionsArray();
+        var d0 = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
         lastPinch = {
-          dist: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y),
-          mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2
+          mx: (p[0].x + p[1].x) / 2, my: (p[0].y + p[1].y) / 2,
+          // Where the gesture began. Touch reports one finger at a time, so
+          // measuring against the previous event instead of against these makes
+          // every pinch a ratchet and every two-finger drag a wobble.
+          startDist: d0, startRadius: self.spherical.radius
         };
         dragModel = null;
       }
@@ -883,11 +887,26 @@
         var p = positionsArray();
         var dist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
         var mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
-        if (lastPinch.dist > 0 && dist > 0) {
-          self.spherical.radius *= lastPinch.dist / dist;
+
+        // Zoom measured from where the gesture started rather than from the
+        // last event. A browser delivers one pointermove per finger, so
+        // half-way through a two-finger drag only one of them has moved and the
+        // distance between them is wrong by a whole step — for two fingers side
+        // by side, sliding them 27 px reads as a 27 px pinch. Measured against
+        // the previous event those errors cancel over a pair, unless the radius
+        // hits its limit in between, in which case they do not; measured
+        // against the start there is nothing to cancel.
+        if (lastPinch.startDist > 0 && dist > 0) {
+          self.spherical.radius = lastPinch.startRadius * (lastPinch.startDist / dist);
         }
-        self.panBy(mx - lastPinch.mx, my - lastPinch.my);
-        lastPinch = { dist: dist, mx: mx, my: my };
+
+        // And the pan is scaled by the radius the gesture began with, which is
+        // what the wobble above was really costing: every second event panned at
+        // a momentarily inflated distance, so two fingers slid sideways carried
+        // the plate half as far again as they went.
+        self.panBy(mx - lastPinch.mx, my - lastPinch.my, lastPinch.startRadius);
+        lastPinch.mx = mx;
+        lastPinch.my = my;
         self.updateCamera();
       }
       ev.preventDefault();
@@ -924,12 +943,31 @@
     }, { passive: false });
   };
 
-  Viewer.prototype.panBy = function (dx, dy) {
-    var scale = this.spherical.radius * 0.0022;
-    var right = new THREE.Vector3().subVectors(this.camera.position, this.target).cross(this.camera.up).normalize();
-    var up = new THREE.Vector3().crossVectors(right, new THREE.Vector3().subVectors(this.camera.position, this.target)).normalize();
-    this.target.addScaledVector(right, -dx * scale);
-    this.target.addScaledVector(up, -dy * scale);
+  /**
+   * Slide the view by a movement in screen pixels — dx to the right, dy down,
+   * as the pointer reports them.
+   *
+   * Two things have to be right for this to feel like dragging the plate rather
+   * than fighting it. The direction: the scene follows the finger, which means
+   * the camera moves the other way, so both signs below are negatives of the
+   * pointer's. And the distance: one pixel of finger is one pixel of model,
+   * which is the world size of a pixel at the distance being looked at —
+   * anything else and the model slides out from under the finger holding it.
+   */
+  Viewer.prototype.panBy = function (dx, dy, atRadius) {
+    var height = (this.renderer.domElement && this.renderer.domElement.clientHeight) || 1;
+    // The view is fov degrees tall at the target's distance; one pixel is that
+    // height divided by the canvas. A gesture that is also zooming passes the
+    // distance it started at, so its own zoom does not change its pan.
+    var radius = atRadius > 0 ? atRadius : this.spherical.radius;
+    var worldPerPixel = 2 * radius * Math.tan(this.camera.fov * Math.PI / 360) / height;
+
+    var forward = new THREE.Vector3().subVectors(this.target, this.camera.position);
+    var right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
+    var up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+    this.target.addScaledVector(right, -dx * worldPerPixel);
+    this.target.addScaledVector(up, dy * worldPerPixel);
     this.updateCamera();
   };
 
