@@ -585,9 +585,9 @@
 
     // --- Bambu Lab ---
     bambu_a1: printer('Bambu Lab A1', 'Bambu Lab', 256, 256, 256,
-      { kinematics: 'corexy', accel: 10000, travel: 300, retract: 0.8, retractSpeed: 30, zHop: 0.4, maxSpeed: 500, maxZSpeed: 20 }),
+      { kinematics: 'bedslinger', accel: 10000, travel: 300, retract: 0.8, retractSpeed: 30, zHop: 0.4, maxSpeed: 500, maxZSpeed: 20 }),
     bambu_a1_mini: printer('Bambu Lab A1 mini', 'Bambu Lab', 180, 180, 180,
-      { kinematics: 'corexy', accel: 10000, travel: 300, retract: 0.8, retractSpeed: 30, zHop: 0.4, maxSpeed: 500, maxZSpeed: 20 }),
+      { kinematics: 'bedslinger', accel: 10000, travel: 300, retract: 0.8, retractSpeed: 30, zHop: 0.4, maxSpeed: 500, maxZSpeed: 20 }),
     bambu_p1: printer('Bambu Lab P1P / P1S', 'Bambu Lab', 256, 256, 256,
       { kinematics: 'corexy', accel: 10000, travel: 350, retract: 0.8, retractSpeed: 30, zHop: 0.4, maxSpeed: 500, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 20 }),
     bambu_x1c: printer('Bambu Lab X1 Carbon', 'Bambu Lab', 256, 256, 256,
@@ -603,7 +603,7 @@
     prusa_xl: printer('Prusa XL', 'Prusa', 360, 360, 360,
       { extruders: 5, kinematics: 'corexy', accel: 4000, travel: 250, retract: 0.7, retractSpeed: 35, zHop: 0.4, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 15 }),
     prusa_core_one: printer('Prusa CORE One', 'Prusa', 250, 220, 270,
-      { accel: 6000, travel: 250, retract: 0.7, retractSpeed: 35, zHop: 0.4, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 20 }),
+      { kinematics: 'corexy', accel: 6000, travel: 250, retract: 0.7, retractSpeed: 35, zHop: 0.4, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 20 }),
 
     // --- Creality ---
     ender3: printer('Creality Ender-3 / V2', 'Creality', 220, 220, 250,
@@ -613,13 +613,13 @@
     ender5_plus: printer('Creality Ender-5 Plus', 'Creality', 350, 350, 400,
       { accel: 1000, travel: 150, retract: 5, retractSpeed: 45, start: 'mesh' }),
     creality_k1: printer('Creality K1', 'Creality', 220, 220, 250,
-      { accel: 12000, travel: 300, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
+      { kinematics: 'corexy', accel: 12000, travel: 300, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
         start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 30 }),
     creality_k1_max: printer('Creality K1 Max', 'Creality', 300, 300, 300,
-      { accel: 12000, travel: 300, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
+      { kinematics: 'corexy', accel: 12000, travel: 300, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
         start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 300, maxBedTemp: 120, maxZSpeed: 30 }),
     creality_k2_plus: printer('Creality K2 Plus', 'Creality', 350, 350, 350,
-      { accel: 15000, travel: 400, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
+      { kinematics: 'corexy', accel: 15000, travel: 400, retract: 0.5, retractSpeed: 40, flavor: 'klipper',
         start: 'klipper', end: 'klipper', maxSpeed: 600, maxNozzleTemp: 350, maxBedTemp: 120, maxZSpeed: 30 }),
     creality_cr10: printer('Creality CR-10 / Smart Pro', 'Creality', 300, 300, 400,
       { accel: 800, travel: 120, retract: 5, retractSpeed: 45, zHop: 0 }),
@@ -637,7 +637,7 @@
       { accel: 2000, travel: 180, retract: 1.0, start: 'mesh' }),
     // START_PRINT here takes no parameters, and does not heat: the file does.
     sovol_sv08: printer('Sovol SV08', 'Sovol', 350, 350, 345,
-      { accel: 12000, travel: 400, retract: 0.5, flavor: 'klipper',
+      { kinematics: 'corexy', accel: 12000, travel: 400, retract: 0.5, flavor: 'klipper',
         start: 'sovol_sv08', end: 'klipper', maxSpeed: 600, maxZSpeed: 25 }),
 
     // --- Qidi ---

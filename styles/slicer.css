@@ -693,3 +693,43 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 @media (max-width: 720px) {
   .sl-check-status { bottom: 110px; }
 }
+
+/* Advice — what this model on this machine wants changed, above the settings
+   it is talking about. */
+.sl-advice {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 12px;
+  padding: 4px 10px 8px;
+}
+.sl-advice > summary {
+  cursor: pointer;
+  padding: 8px 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--info, var(--text));
+  list-style: none;
+}
+.sl-advice > summary::-webkit-details-marker { display: none; }
+.sl-advice > summary::before { content: '▾ '; opacity: .6; }
+.sl-advice:not([open]) > summary::before { content: '▸ '; }
+.sl-advice-item {
+  border-left: 3px solid var(--info, var(--border));
+  border-radius: 0 8px 8px 0;
+  background: var(--bg);
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.sl-advice-item.warning { border-left-color: var(--warning); }
+.sl-advice-item .msg { color: var(--text); font-weight: 600; }
+.sl-advice-item .why { color: var(--text-muted); margin-top: 3px; }
+.sl-advice-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.sl-advice-actions .sl-btn { padding: 4px 10px; font-size: 12px; }

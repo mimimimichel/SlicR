@@ -25,7 +25,12 @@
     cutZ: null,
     cutKeep: 'both',
     safetyOverride: false,
-    uniformScale: true
+    uniformScale: true,
+    // What the advisor measured, and which mesh it measured — recomputing on
+    // every panel render would walk every triangle for nothing.
+    shape: null,
+    shapeKey: '',
+    adviceDismissed: {}
   };
 
   // ---------------------------------------------------------------------------
@@ -253,12 +258,134 @@
   // Panel rendering
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Advice
+  //
+  // What this model, on this machine, in this filament, wants changed. The
+  // measurement is the expensive half and only depends on the geometry, so it
+  // is kept until the geometry moves.
+  // ---------------------------------------------------------------------------
+
+  function meshSignature() {
+    var v = state.viewer;
+    if (!v || !v.models.length) return '';
+    var parts = [state.settings.supportThreshold, state.settings.nozzle];
+    for (var i = 0; i < v.models.length; i++) {
+      var mesh = v.models[i].mesh;
+      mesh.updateMatrixWorld(true);
+      parts.push(mesh.geometry.attributes.position.count);
+      var e = mesh.matrixWorld.elements;
+      for (var k = 0; k < 16; k++) parts.push(Math.round(e[k] * 1000));
+    }
+    return parts.join(',');
+  }
+
+  function currentShape() {
+    if (!window.OrcaAdvisor || !state.viewer) return null;
+    var sig = meshSignature();
+    if (!sig) { state.shape = null; state.shapeKey = ''; return null; }
+    if (sig !== state.shapeKey) {
+      state.shape = window.OrcaAdvisor.measure(state.viewer.collectTriangles(),
+        { overhangThreshold: state.settings.supportThreshold });
+      state.shapeKey = sig;
+    }
+    return state.shape;
+  }
+
+  function adviceId(a) { return (a.key || a.label) + '=' + JSON.stringify(a.value); }
+
+  function showValue(v) {
+    if (v === true) return 'on';
+    if (v === false) return 'off';
+    if (typeof v === 'number') return String(Math.round(v * 1000) / 1000);
+    return String(v);
+  }
+
+  function renderAdvice(body) {
+    var shape = currentShape();
+    if (!shape) return;
+    var all = window.OrcaAdvisor.advise(shape, state.settings);
+    var list = all.filter(function (a) { return !state.adviceDismissed[adviceId(a)]; });
+    if (!list.length) return;
+
+    var wrap = document.createElement('details');
+    wrap.className = 'sl-advice';
+    wrap.open = true;
+    var head = document.createElement('summary');
+    var changes = list.filter(function (a) { return a.key; }).length;
+    head.textContent = list.length + (list.length > 1 ? ' notes' : ' note') +
+      ' on this model' + (changes ? ' — ' + changes + ' can be applied' : '');
+    wrap.appendChild(head);
+
+    list.forEach(function (a) {
+      var card = document.createElement('div');
+      card.className = 'sl-advice-item' + (a.kind === 'warning' ? ' warning' : '');
+
+      var title = document.createElement('div');
+      title.className = 'msg';
+      title.textContent = a.label;
+      card.appendChild(title);
+
+      var why = document.createElement('div');
+      why.className = 'why';
+      why.textContent = a.why;
+      card.appendChild(why);
+
+      var row = document.createElement('div');
+      row.className = 'sl-advice-actions';
+      if (a.key) {
+        var apply = document.createElement('button');
+        apply.className = 'sl-btn primary';
+        apply.type = 'button';
+        apply.textContent = showValue(a.from) + ' → ' + showValue(a.value);
+        apply.onclick = function () {
+          setPath(state.settings, a.key, a.value);
+          persist();
+          invalidate();
+          renderPanel();
+        };
+        row.appendChild(apply);
+      }
+      var hide = document.createElement('button');
+      hide.className = 'sl-btn';
+      hide.type = 'button';
+      hide.textContent = 'Dismiss';
+      hide.onclick = function () {
+        state.adviceDismissed[adviceId(a)] = true;
+        renderPanel();
+      };
+      row.appendChild(hide);
+      card.appendChild(row);
+      wrap.appendChild(card);
+    });
+
+    if (changes > 1) {
+      var allRow = document.createElement('div');
+      allRow.className = 'sl-advice-actions';
+      var applyAll = document.createElement('button');
+      applyAll.className = 'sl-btn primary';
+      applyAll.type = 'button';
+      applyAll.textContent = 'Apply all ' + changes;
+      applyAll.onclick = function () {
+        list.forEach(function (a) { if (a.key) setPath(state.settings, a.key, a.value); });
+        persist();
+        invalidate();
+        renderPanel();
+      };
+      allRow.appendChild(applyAll);
+      wrap.appendChild(allRow);
+    }
+
+    body.appendChild(wrap);
+  }
+
   function renderPanel() {
     var body = el('panel-body');
     body.innerHTML = '';
     if (state.tab === 'object') { renderObjectTab(body); return; }
     if (state.tab === 'check') { renderCheckTab(body); return; }
     if (state.tab === 'print' && presetsBelong() === 'panel') body.appendChild(state.presetsEl);
+    if (state.tab === 'print') renderAdvice(body);
     var sections = state.tab === 'machine' ? MACHINE_SECTIONS : PRINT_SECTIONS;
 
     body.appendChild(renderSearch());
