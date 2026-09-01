@@ -733,3 +733,7 @@ input[type="range"].sl-vrange::-moz-range-thumb {
   margin-top: 8px;
 }
 .sl-advice-actions .sl-btn { padding: 4px 10px; font-size: 12px; }
+
+/* The send button only exists once there is a printer to send to, and the
+   button's own display rule would otherwise win against [hidden]. */
+#btn-send[hidden] { display: none !important; }

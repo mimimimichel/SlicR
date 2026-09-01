@@ -2,13 +2,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      No permissions at all — and deliberately no INTERNET.
-      Every asset is served from inside the APK through WebViewAssetLoader,
-      so the slicer physically cannot send a model anywhere.
+      One permission, and only since the app learned to hand a finished file to
+      OctoPrint. The page itself still cannot reach the network: every request
+      it makes is either answered from inside the APK or refused outright in
+      MainActivity. The single exception is the upload, which is performed by
+      the app rather than the page, to the address the user typed and nowhere
+      else. Models never leave the device; a G-code file goes to your printer
+      when you press the button.
+
+      Cleartext is allowed because OctoPrint on a home network is http, and a
+      printer on the far side of a router is not a thing this app can fix.
     -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"

@@ -23,11 +23,16 @@ import androidx.annotation.Nullable;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewClientCompat;
 
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -35,9 +40,10 @@ import java.nio.charset.StandardCharsets;
  *
  * The web app is served from https://appassets.androidplatform.net rather than
  * file:// — a real origin is what makes the Web Worker, blob URLs and
- * localStorage behave exactly as they do on the website. Nothing leaves the
- * device: the app holds no INTERNET permission and every request is answered
- * from the APK's own assets.
+ * localStorage behave exactly as they do on the website. Every request the page
+ * makes is answered from the APK's own assets or refused — the page cannot
+ * reach the network at all. The app can, for exactly one thing: handing a
+ * finished G-code file to an OctoPrint the user has entered the address of.
  */
 public class MainActivity extends Activity {
 
@@ -87,7 +93,14 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClientCompat() {
             @Override
             public WebResourceResponse shouldInterceptRequest(@NonNull WebView view, @NonNull WebResourceRequest request) {
-                return assetLoader.shouldInterceptRequest(request.getUrl());
+                WebResourceResponse asset = assetLoader.shouldInterceptRequest(request.getUrl());
+                if (asset != null) return asset;
+                // The app has the INTERNET permission now, for the OctoPrint
+                // upload. That is the app's to make, not the page's: anything
+                // the page asks for that is not in the APK gets nothing back.
+                return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked",
+                        java.util.Collections.emptyMap(),
+                        new ByteArrayInputStream(new byte[0]));
             }
 
             @Override
@@ -277,6 +290,171 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void toast(String message) {
             MainActivity.this.toast(message);
+        }
+
+        /**
+         * Hand the file that beginSave/appendSave just streamed to an OctoPrint,
+         * rather than letting the page do it. The page is served from an https
+         * origin and a printer on a home network is http, which a browser blocks
+         * outright and no setting on the page can undo; and doing it here means
+         * the API key and the file go to that one host over one connection this
+         * code opened, with no cross-origin machinery in between.
+         *
+         * Answers asynchronously through window.OrcaOctoResult(ok, message).
+         */
+        @JavascriptInterface
+        public void octoSend(final String baseUrl, final String apiKey, final boolean startPrint) {
+            final File file = pendingGcodeFile;
+            final String name = pendingGcodeName;
+            closeGcodeStream();
+            if (file == null || !file.exists()) {
+                octoResult(false, "Nothing was prepared to send.");
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    postToOctoPrint(baseUrl, apiKey, name, file, startPrint);
+                    octoResult(true, startPrint
+                            ? name + " is uploaded and printing."
+                            : name + " is on the printer and selected.");
+                } catch (Exception e) {
+                    Log.e(TAG, "OctoPrint upload failed", e);
+                    octoResult(false, e.getMessage() == null ? e.toString() : e.getMessage());
+                } finally {
+                    runOnUiThread(MainActivity.this::discardPendingGcode);
+                }
+            }, "octoprint-upload").start();
+        }
+    }
+
+    private void octoResult(final boolean ok, final String message) {
+        // The message has to survive being pasted into a script, so it crosses
+        // as a JSON string rather than by concatenation.
+        final String safe = jsonString(message == null ? "" : message);
+        runOnUiThread(() -> {
+            if (webView == null) return;
+            webView.evaluateJavascript(
+                    "window.OrcaOctoResult && window.OrcaOctoResult(" + ok + "," + safe + ");", null);
+        });
+    }
+
+    /** Minimal JSON string escaping — enough to carry an error message safely. */
+    private static String jsonString(String value) {
+        StringBuilder out = new StringBuilder(value.length() + 2);
+        out.append('"');
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"': out.append("\\\""); break;
+                case '\\': out.append("\\\\"); break;
+                case '\n': out.append("\\n"); break;
+                case '\r': out.append("\\r"); break;
+                case '\t': out.append("\\t"); break;
+                default:
+                    if (c < 0x20 || c == 0x2028 || c == 0x2029) {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+            }
+        }
+        return out.append('"').toString();
+    }
+
+    /**
+     * One multipart POST to /api/files/local, written by hand because the file
+     * can be tens of megabytes and there is no reason to hold it in memory.
+     */
+    private void postToOctoPrint(String baseUrl, String apiKey, String name, File file, boolean startPrint)
+            throws IOException {
+        String base = baseUrl == null ? "" : baseUrl.trim();
+        if (base.isEmpty()) throw new IOException("No OctoPrint address set.");
+        if (!base.matches("(?i)^https?://.*")) base = "http://" + base;
+        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+
+        String boundary = "----slicr" + System.currentTimeMillis();
+        String dash = "--";
+        String crlf = "\r\n";
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(base + "/api/files/local").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(120000);
+        conn.setRequestProperty("X-Api-Key", apiKey == null ? "" : apiKey);
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        conn.setFixedLengthStreamingMode(multipartLength(boundary, name, file, startPrint));
+
+        try (OutputStream raw = conn.getOutputStream();
+             BufferedOutputStream out = new BufferedOutputStream(raw)) {
+            out.write((dash + boundary + crlf).getBytes(StandardCharsets.UTF_8));
+            out.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"" + crlf)
+                    .getBytes(StandardCharsets.UTF_8));
+            out.write(("Content-Type: text/x.gcode" + crlf + crlf).getBytes(StandardCharsets.UTF_8));
+            try (FileInputStream in = new FileInputStream(file)) {
+                byte[] buf = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buf)) > 0) out.write(buf, 0, read);
+            }
+            out.write(crlf.getBytes(StandardCharsets.UTF_8));
+            // Selecting is what makes it the loaded job; printing is only ever
+            // sent when the user asked for it and confirmed it.
+            writeField(out, boundary, "select", "true");
+            if (startPrint) writeField(out, boundary, "print", "true");
+            out.write((dash + boundary + dash + crlf).getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
+
+        int status = conn.getResponseCode();
+        if (status < 200 || status >= 300) {
+            throw new IOException(explainStatus(status, base));
+        }
+        InputStream body = conn.getInputStream();
+        if (body != null) body.close();
+    }
+
+    private static void writeField(OutputStream out, String boundary, String key, String value) throws IOException {
+        out.write(("--" + boundary + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("Content-Disposition: form-data; name=\"" + key + "\"\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write((value + "\r\n").getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static long multipartLength(String boundary, String name, File file, boolean startPrint) {
+        long len = 0;
+        len += ("--" + boundary + "\r\n").length();
+        len += ("Content-Disposition: form-data; name=\"file\"; filename=\"" + name + "\"\r\n").length();
+        len += ("Content-Type: text/x.gcode\r\n\r\n").length();
+        len += file.length();
+        len += 2;                                            // the CRLF after the file
+        len += fieldLength(boundary, "select", "true");
+        if (startPrint) len += fieldLength(boundary, "print", "true");
+        len += ("--" + boundary + "--\r\n").length();
+        return len;
+    }
+
+    private static long fieldLength(String boundary, String key, String value) {
+        return ("--" + boundary + "\r\n").length()
+                + ("Content-Disposition: form-data; name=\"" + key + "\"\r\n\r\n").length()
+                + (value + "\r\n").length();
+    }
+
+    /** The same sentences the browser build gives, for the same status codes. */
+    private static String explainStatus(int status, String base) {
+        switch (status) {
+            case 401:
+            case 403:
+                return "OctoPrint refused the API key. Copy it again from Settings \u2192 API.";
+            case 404:
+                return "Nothing answered at " + base + ". Check the address.";
+            case 409:
+                return "The printer is not ready: not connected, or already printing.";
+            case 413:
+                return "OctoPrint rejected the file as too large.";
+            case 415:
+                return "OctoPrint would not take this as a G-code file.";
+            default:
+                if (status >= 500) return "OctoPrint failed on its side (" + status + ").";
+                return "OctoPrint answered " + status + ".";
         }
     }
 

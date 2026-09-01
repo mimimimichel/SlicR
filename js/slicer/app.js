@@ -7,6 +7,12 @@
 
   var P = window.OrcaPresets;
   var STORAGE_KEY = 'orca_slicer_settings_v1';
+  // The printer's address and API key are kept apart from the print settings on
+  // purpose. They belong to this device and not to a profile: changing printer
+  // or filament rebuilds the settings from the presets, which would throw the
+  // connection away, and a profile exported to a file would otherwise carry a
+  // standing password for someone's machine inside it.
+  var OCTO_KEY = 'orca_slicer_octoprint_v1';
 
   var el = function (id) { return document.getElementById(id); };
   var state = {
@@ -30,7 +36,9 @@
     // every panel render would walk every triangle for nothing.
     shape: null,
     shapeKey: '',
-    adviceDismissed: {}
+    adviceDismissed: {},
+    octo: { url: '', key: '', autoStart: false },
+    sending: false
   };
 
   // ---------------------------------------------------------------------------
@@ -379,6 +387,170 @@
     body.appendChild(wrap);
   }
 
+  // ---------------------------------------------------------------------------
+  // OctoPrint
+  // ---------------------------------------------------------------------------
+
+  function octoRow(label, hint, control) {
+    var row = document.createElement('div');
+    row.className = 'sl-field';
+    var lab = document.createElement('label');
+    lab.textContent = label;
+    if (hint) {
+      var small = document.createElement('small');
+      small.textContent = hint;
+      lab.appendChild(small);
+    }
+    row.appendChild(lab);
+    var wrap = document.createElement('div');
+    wrap.className = 'sl-control';
+    wrap.appendChild(control);
+    row.appendChild(wrap);
+    return row;
+  }
+
+  function octoInput(type, placeholder, value, onchange) {
+    var input = document.createElement('input');
+    input.className = 'sl-num';
+    input.type = type;
+    input.style.width = '100%';
+    input.style.textAlign = 'left';
+    input.autocomplete = 'off';
+    input.placeholder = placeholder;
+    input.value = value;
+    input.onchange = function () { onchange(input.value.trim()); };
+    return input;
+  }
+
+  function renderOctoPrint(body) {
+    var details = document.createElement('details');
+    details.className = 'sl-section';
+    if (state.octo.url) details.open = true;
+    var summary = document.createElement('summary');
+    summary.textContent = 'OctoPrint';
+    details.appendChild(summary);
+
+    details.appendChild(octoRow('Address', 'Host name or IP, with a port if it uses one',
+      octoInput('text', 'octopi.local  or  192.168.1.42:5000', state.octo.url, function (v) {
+        state.octo.url = v; saveOcto(); updateSendButton();
+      })));
+
+    details.appendChild(octoRow('API key',
+      'OctoPrint → Settings → API. Kept on this device, sent to that printer only',
+      octoInput('password', 'API key', state.octo.key, function (v) {
+        state.octo.key = v; saveOcto(); updateSendButton();
+      })));
+
+    var sw = document.createElement('span');
+    sw.className = 'sl-switch';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!state.octo.autoStart;
+    cb.setAttribute('aria-label', 'Start printing on arrival');
+    cb.onchange = function () { state.octo.autoStart = cb.checked; saveOcto(); updateSendButton(); };
+    sw.appendChild(cb);
+    sw.appendChild(document.createElement('i'));
+    details.appendChild(octoRow('Start printing on arrival',
+      'Off, the file is uploaded and selected and you press print at the machine', sw));
+
+    var row = document.createElement('div');
+    row.className = 'sl-row';
+    var testBtn = document.createElement('button');
+    testBtn.className = 'sl-btn';
+    testBtn.type = 'button';
+    testBtn.id = 'btn-octo-test';
+    testBtn.textContent = 'Test the connection';
+    var result = document.createElement('div');
+    result.className = 'sl-hint';
+    result.id = 'octo-result';
+    testBtn.onclick = function () {
+      if (!window.OrcaOctoPrint) { result.textContent = 'The OctoPrint client did not load.'; return; }
+      testBtn.disabled = true;
+      result.textContent = 'Asking ' + window.OrcaOctoPrint.normaliseUrl(state.octo.url) + '…';
+      window.OrcaOctoPrint.test(state.octo).then(function (info) {
+        testBtn.disabled = false;
+        result.textContent = 'OctoPrint ' + info.server + ' answered. The printer says: ' + info.state + '.';
+      }, function (err) {
+        testBtn.disabled = false;
+        result.textContent = err.message;
+      });
+    };
+    row.appendChild(testBtn);
+    details.appendChild(row);
+    details.appendChild(result);
+
+    body.appendChild(details);
+  }
+
+  function updateSendButton() {
+    var btn = el('btn-send');
+    if (!btn) return;
+    var configured = !!(state.octo.url && state.octo.key);
+    btn.hidden = !configured;
+    btn.disabled = !configured || !state.result || state.sending || state.slicing;
+    btn.title = state.octo.autoStart ? 'Send to OctoPrint and start printing' : 'Send to OctoPrint';
+  }
+
+  /**
+   * Upload what was just sliced. The same safety check that guards the download
+   * guards this, and for the same reason: these are the exact bytes the machine
+   * will run. Starting the print happens only when it has been asked for in the
+   * settings, and is confirmed even then — nobody should discover that their
+   * printer started because they pressed an upload button.
+   */
+  function sendToOctoPrint() {
+    if (!state.result || state.sending) return;
+    if (!window.OrcaOctoPrint) { alert('The OctoPrint client did not load.'); return; }
+
+    var gcode = withThumbnail(state.result.gcode);
+    var report = window.OrcaGcodeCheck
+      ? window.OrcaGcodeCheck.verify(gcode, state.settings)
+      : { errors: 1, warnings: 0, findings: [] };
+    state.result.report = report;
+    updateCheckStatus();
+    if (report.errors > 0 && !state.safetyOverride) { openPanel('check'); return; }
+
+    var start = !!state.octo.autoStart;
+    if (start && !window.confirm(
+      'This uploads the file and starts printing it straight away.\n\n' +
+      'The machine will heat up and move whether or not anyone is beside it. Continue?')) return;
+
+    var name = (state.viewer.models[0] && state.viewer.models[0].name) || 'model';
+    var quality = state.settings.layerHeight.toFixed(2).replace('.', 'p');
+    var file = name.replace(/[^\w-]+/g, '_') + '_' + quality + 'mm.gcode';
+
+    state.sending = true;
+    updateSendButton();
+    showProgress(start ? 'Sending and starting' : 'Sending to OctoPrint', 0.5);
+
+    function finished(ok, message) {
+      hideProgress();
+      state.sending = false;
+      updateSendButton();
+      state.lastSend = (ok ? '' : 'error: ') + message;
+      if (ok && window.AndroidSlicer) window.AndroidSlicer.toast(message);
+      else alert(ok ? message : 'OctoPrint\n\n' + message);
+    }
+
+    // In the app the page cannot reach the network at all — it is served from
+    // an https origin and the printer is on http, which no setting here can
+    // undo. The app makes that one request instead, over the same streaming
+    // path the file save uses.
+    if (window.AndroidSlicer && window.AndroidSlicer.octoSend) {
+      window.OrcaOctoResult = function (ok, message) { finished(!!ok, String(message || '')); };
+      if (!streamToAndroid(window.OrcaOctoPrint.fileName(file), gcode, finished)) return;
+      window.AndroidSlicer.octoSend(state.octo.url, state.octo.key, start);
+      return;
+    }
+
+    window.OrcaOctoPrint.upload(state.octo, file, gcode, { print: start, select: true })
+      .then(function (res) {
+        finished(true, res.started
+          ? res.name + ' is uploaded and printing.'
+          : res.name + ' is on the printer and selected. Press print at the machine.');
+      }, function (err) { finished(false, err.message); });
+  }
+
   function renderPanel() {
     var body = el('panel-body');
     body.innerHTML = '';
@@ -417,6 +589,8 @@
       body.appendChild(flat);
       return;
     }
+
+    if (state.tab === 'machine') renderOctoPrint(body);
 
     sections.forEach(function (section) {
       var details = document.createElement('details');
@@ -1180,6 +1354,21 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings)); } catch (e) { /* private mode */ }
   }
 
+  function saveOcto() {
+    try { localStorage.setItem(OCTO_KEY, JSON.stringify(state.octo)); } catch (e) { /* private mode */ }
+  }
+
+  function loadOcto() {
+    try {
+      var raw = localStorage.getItem(OCTO_KEY);
+      if (!raw) return;
+      var o = JSON.parse(raw) || {};
+      state.octo.url = typeof o.url === 'string' ? o.url : '';
+      state.octo.key = typeof o.key === 'string' ? o.key : '';
+      state.octo.autoStart = !!o.autoStart;
+    } catch (e) { /* leave it empty */ }
+  }
+
   function restore() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
@@ -1319,6 +1508,7 @@
     state.slicing = true;
     el('btn-slice').disabled = true;
     el('btn-export').disabled = true;
+    updateSendButton();
     showProgress('Preparing…', 0.01);
 
     // Painted marks belong to this plate, not to the profile, so they are added
@@ -1422,6 +1612,7 @@
     state.result = msg;
     el('btn-slice').disabled = false;
     el('btn-export').disabled = false;
+    updateSendButton();
     el('tool-preview').disabled = false;
 
     state.viewer.buildPreview(msg.layers, state.showTravels);
@@ -1459,6 +1650,7 @@
     el('check-status').classList.remove('show');
     el('btn-export').classList.remove('blocked');
     el('btn-export').disabled = true;
+    updateSendButton();
     el('tool-preview').disabled = true;
     setPreview(false);
     el('stats').classList.remove('show');
@@ -1591,17 +1783,28 @@
   }
 
   /** Stream the G-code across the JS bridge in pieces the WebView can carry. */
-  function exportViaAndroid(filename, gcode) {
+  /**
+   * G-code crosses the bridge in chunks and is buffered to a file on the native
+   * side. What happens to that file afterwards — the storage picker, or an
+   * upload — is the caller's business.
+   */
+  function streamToAndroid(filename, gcode, onError) {
     var CHUNK = 256 * 1024;
     try {
       if (!window.AndroidSlicer.beginSave(filename)) throw new Error('beginSave refused');
       for (var i = 0; i < gcode.length; i += CHUNK) {
         if (!window.AndroidSlicer.appendSave(gcode.slice(i, i + CHUNK))) throw new Error('appendSave refused');
       }
-      window.AndroidSlicer.endSave();
+      return true;
     } catch (err) {
-      alert('Could not hand the G-code to Android: ' + (err.message || err));
+      var msg = 'Could not hand the G-code to Android: ' + (err.message || err);
+      if (onError) onError(false, msg); else alert(msg);
+      return false;
     }
+  }
+
+  function exportViaAndroid(filename, gcode) {
+    if (streamToAndroid(filename, gcode)) window.AndroidSlicer.endSave();
   }
 
   /** Android back button: close the settings sheet before leaving the app. */
@@ -1655,6 +1858,7 @@
 
     state.presetsEl = el('presets');
     state.settings = restore() || P.buildSettings('centauri_carbon', 'pla', 'q020');
+    loadOcto();
 
     state.viewer = new window.OrcaViewer(el('sl-canvas'), {
       onSelect: function () { if (state.tab === 'object') renderPanel(); },
@@ -1692,6 +1896,7 @@
 
     el('btn-slice').onclick = slice;
     el('btn-export').onclick = exportGcode;
+    el('btn-send').onclick = sendToOctoPrint;
     el('btn-panel').onclick = function () {
       if (el('panel').classList.contains('open')) closePanel(); else openPanel();
     };
