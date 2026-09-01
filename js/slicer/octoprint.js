@@ -281,8 +281,116 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // What is already on the machine
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every printable file OctoPrint holds, flattened out of the folder tree it
+   * answers with and newest first — which is the order somebody looking for
+   * the thing they just sent wants them in.
+   */
+  function files(cfg, opts) {
+    return request('GET', '/api/files?recursive=true', cfg, opts).then(function (res) {
+      var out = [];
+      (function walk(list) {
+        for (var i = 0; list && i < list.length; i++) {
+          var f = list[i];
+          if (f.type === 'folder' || f.children) { walk(f.children); continue; }
+          if (f.type && f.type !== 'machinecode') continue;
+          var analysis = f.gcodeAnalysis || {};
+          out.push({
+            name: f.display || f.name || f.path,
+            path: f.path || f.name,
+            origin: f.origin || 'local',
+            size: f.size || 0,
+            date: f.date || 0,
+            seconds: analysis.estimatedPrintTime || 0,
+            filamentMm: analysis.filament && analysis.filament.tool0
+              ? analysis.filament.tool0.length : 0
+          });
+        }
+      })(res && res.files);
+      out.sort(function (a, b) { return (b.date || 0) - (a.date || 0); });
+      return { files: out, free: res && res.free };
+    });
+  }
+
+  /**
+   * Load a file as the current job, and optionally start it. Printing is the
+   * one irreversible thing here and is never implied — the caller says so.
+   */
+  function selectFile(cfg, file, print, opts) {
+    var origin = (file && file.origin) || 'local';
+    var path = encodePath((file && file.path) || file);
+    return request('POST', '/api/files/' + origin + '/' + path, cfg, opts, {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'select', print: !!print })
+    }).then(function () {
+      return { path: (file && file.path) || file, started: !!print };
+    });
+  }
+
+  /** Remove a file from the machine. */
+  function deleteFile(cfg, file, opts) {
+    var origin = (file && file.origin) || 'local';
+    var path = encodePath((file && file.path) || file);
+    return request('DELETE', '/api/files/' + origin + '/' + path, cfg, opts)
+      .then(function () { return { path: (file && file.path) || file, deleted: true }; });
+  }
+
+  /** A path goes in the URL a segment at a time; the slashes are structure. */
+  function encodePath(path) {
+    return String(path || '').split('/').map(encodeURIComponent).join('/');
+  }
+
+  /**
+   * Where the camera is, if there is one.
+   *
+   * OctoPrint moved this in 1.9: what used to be webcam.streamUrl now lives
+   * under the Classic Webcam plugin. Both are read, and if the machine says
+   * nothing the conventional addresses are tried — that is where a stock
+   * install puts them.
+   */
+  function webcam(cfg, opts) {
+    return request('GET', '/api/settings', cfg, opts).then(function (s) {
+      var classic = (s && s.plugins && s.plugins.classicwebcam) || {};
+      var legacy = (s && s.webcam) || {};
+      var stream = classic.stream || legacy.streamUrl || '/webcam/?action=stream';
+      var snapshot = classic.snapshot || legacy.snapshotUrl || '/webcam/?action=snapshot';
+      return {
+        stream: absolute(cfg, stream),
+        snapshot: absolute(cfg, snapshot),
+        flipH: !!(classic.flipH || legacy.flipH),
+        flipV: !!(classic.flipV || legacy.flipV),
+        rotate90: !!(classic.rotate90 || legacy.rotate90),
+        declared: !!(classic.stream || legacy.streamUrl)
+      };
+    }, function () {
+      // An older or locked-down build may not hand over its settings at all;
+      // the usual addresses are still worth a try.
+      return {
+        stream: absolute(cfg, '/webcam/?action=stream'),
+        snapshot: absolute(cfg, '/webcam/?action=snapshot'),
+        flipH: false, flipV: false, rotate90: false, declared: false
+      };
+    });
+  }
+
+  /** A URL from the settings may be relative to the printer, or absolute. */
+  function absolute(cfg, url) {
+    var u = String(url || '');
+    if (/^https?:\/\//i.test(u)) return u;
+    var base = normaliseUrl(cfg && cfg.url);
+    return base + (u.charAt(0) === '/' ? '' : '/') + u;
+  }
+
   var api = {
     normaliseUrl: normaliseUrl,
+    files: files,
+    selectFile: selectFile,
+    deleteFile: deleteFile,
+    webcam: webcam,
     printerState: printerState,
     job: job,
     jog: jog,

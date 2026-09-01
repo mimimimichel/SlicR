@@ -43,7 +43,12 @@
     // The sweep of the local network, and what it turned up.
     scan: { running: false, where: '', found: [], done: false, error: '', cancel: false },
     // What the printer last said about itself, and the poll that keeps asking.
-    control: { state: null, error: '', note: '', reading: false, busy: false, timer: null }
+    control: { state: null, error: '', note: '', reading: false, busy: false, timer: null },
+    // What is already on the machine, once somebody asks to see it.
+    files: { open: false, loading: false, list: null, free: '', error: '', note: '' },
+    // And what it can see, while somebody is looking.
+    camera: { open: false, where: null, frame: '', error: '', timer: null,
+              flipH: false, flipV: false }
   };
 
   // ---------------------------------------------------------------------------
@@ -477,8 +482,294 @@
     body.appendChild(connected);
 
     renderControl(body);
+    renderCamera(body);
+    renderFiles(body);
     renderScanner(body);
     renderPrinterLink(body);
+  }
+
+  // ---------------------------------------------------------------------------
+  // What is already on the machine
+  // ---------------------------------------------------------------------------
+
+  function fmtSize(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  function fmtWhen(seconds) {
+    if (!seconds) return '';
+    var days = Math.floor((Date.now() / 1000 - seconds) / 86400);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 30) return days + ' days ago';
+    return new Date(seconds * 1000).toLocaleDateString();
+  }
+
+  function fmtSpan(seconds) {
+    if (!seconds) return '';
+    var m = Math.round(seconds / 60);
+    if (m < 60) return m + ' min';
+    return Math.floor(m / 60) + ' h ' + (m % 60 ? (m % 60) + ' min' : '');
+  }
+
+  /**
+   * The files the machine already holds. Not a file manager — a way to start
+   * again what was printed last week without slicing it twice, and to clear
+   * out what is no longer wanted.
+   */
+  function renderFiles(body) {
+    if (state.link.kind !== 'octoprint' || !linkReady() || !window.OrcaOctoPrint) return;
+
+    var box = document.createElement('details');
+    box.className = 'sl-section';
+    box.id = 'files-box';
+    box.open = !!state.files.open;
+    var summary = document.createElement('summary');
+    summary.textContent = 'On the printer';
+    box.appendChild(summary);
+    box.addEventListener('toggle', function () {
+      state.files.open = box.open;
+      if (box.open && !state.files.list && !state.files.loading) loadPrinterFiles();
+    });
+
+    var note = document.createElement('div');
+    note.className = 'sl-hint';
+    note.id = 'files-note';
+    note.textContent = state.files.error ? state.files.error
+      : state.files.loading ? 'Asking the printer what it has…'
+      : state.files.list ? (state.files.list.length + ' file' +
+          (state.files.list.length === 1 ? '' : 's') +
+          (state.files.free ? ' · ' + state.files.free + ' free' : ''))
+      : 'Open this to see what is on the machine.';
+    box.appendChild(note);
+
+    (state.files.list || []).forEach(function (f) {
+      var row = document.createElement('div');
+      row.className = 'sl-file';
+
+      var head = document.createElement('div');
+      head.className = 'msg';
+      head.textContent = f.name;
+      row.appendChild(head);
+
+      var facts = [fmtSize(f.size), fmtWhen(f.date), fmtSpan(f.seconds)]
+        .filter(function (s) { return s; }).join(' · ');
+      if (facts) {
+        var why = document.createElement('div');
+        why.className = 'why';
+        why.textContent = facts;
+        row.appendChild(why);
+      }
+
+      var actions = document.createElement('div');
+      actions.className = 'sl-advice-actions';
+
+      var print = document.createElement('button');
+      print.className = 'sl-btn primary';
+      print.type = 'button';
+      print.textContent = 'Print';
+      print.onclick = function () {
+        // Starting a print is the one thing here that cannot be undone from
+        // the sofa, so it is asked for rather than assumed.
+        if (!window.confirm('Print ' + f.name + ' now?\n\n' +
+          'The printer will heat up and start on its own.')) return;
+        fileAction(window.OrcaOctoPrint.selectFile(linkConfig(), f, true),
+          f.name + ' is printing.');
+      };
+      actions.appendChild(print);
+
+      var select = document.createElement('button');
+      select.className = 'sl-btn';
+      select.type = 'button';
+      select.textContent = 'Load';
+      select.title = 'Make this the current job without starting it';
+      select.onclick = function () {
+        fileAction(window.OrcaOctoPrint.selectFile(linkConfig(), f, false),
+          f.name + ' is loaded. Press print at the machine.');
+      };
+      actions.appendChild(select);
+
+      var remove = document.createElement('button');
+      remove.className = 'sl-btn';
+      remove.type = 'button';
+      remove.textContent = 'Delete';
+      remove.onclick = function () {
+        if (!window.confirm('Delete ' + f.name + ' from the printer?\n\n' +
+          'This cannot be undone from here.')) return;
+        fileAction(window.OrcaOctoPrint.deleteFile(linkConfig(), f),
+          f.name + ' is gone.', true);
+      };
+      actions.appendChild(remove);
+
+      row.appendChild(actions);
+      box.appendChild(row);
+    });
+
+    var refresh = document.createElement('div');
+    refresh.className = 'sl-row';
+    var again = document.createElement('button');
+    again.className = 'sl-btn';
+    again.type = 'button';
+    again.id = 'btn-files-refresh';
+    again.textContent = state.files.loading ? 'Asking…' : 'Refresh';
+    again.disabled = !!state.files.loading;
+    again.onclick = function () { loadPrinterFiles(); };
+    refresh.appendChild(again);
+    box.appendChild(refresh);
+
+    body.appendChild(box);
+  }
+
+  function loadPrinterFiles() {
+    if (!window.OrcaOctoPrint || !linkReady()) return;
+    state.files.loading = true;
+    state.files.error = '';
+    if (state.tab === 'device') renderPanel();
+    window.OrcaOctoPrint.files(linkConfig()).then(function (res) {
+      state.files.loading = false;
+      state.files.list = res.files;
+      state.files.free = res.free;
+      if (state.tab === 'device') renderPanel();
+    }, function (err) {
+      state.files.loading = false;
+      state.files.list = null;
+      state.files.error = err.message;
+      if (state.tab === 'device') renderPanel();
+    });
+  }
+
+  /** One thing done to one file, with the answer said out loud. */
+  function fileAction(promise, done, reload) {
+    state.files.error = '';
+    promise.then(function () {
+      state.files.note = done;
+      if (window.AndroidSlicer && window.AndroidSlicer.toast) window.AndroidSlicer.toast(done);
+      else alert(done);
+      if (reload) loadPrinterFiles();
+      else if (state.tab === 'device') { pollControl(true); renderPanel(); }
+    }, function (err) {
+      state.files.error = err.message;
+      if (state.tab === 'device') renderPanel();
+      alert(err.message);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // The camera
+  // ---------------------------------------------------------------------------
+
+  /**
+   * What the printer can see.
+   *
+   * In a browser the stream is an ordinary image: an <img> pointed at the
+   * MJPEG endpoint, which needs no cross-origin permission because images
+   * never have. Inside the app the page reaches nothing at all, so frames are
+   * fetched natively, one at a time, and shown as they arrive.
+   */
+  function renderCamera(body) {
+    if (state.link.kind !== 'octoprint' || !linkReady()) return;
+
+    var box = document.createElement('details');
+    box.className = 'sl-section';
+    box.id = 'camera-box';
+    box.open = !!state.camera.open;
+    var summary = document.createElement('summary');
+    summary.textContent = 'Camera';
+    box.appendChild(summary);
+
+    var frame = document.createElement('div');
+    frame.className = 'sl-camera';
+    var img = document.createElement('img');
+    img.id = 'camera-view';
+    img.alt = 'What the printer can see';
+    if (state.camera.flipV) img.classList.add('flip-v');
+    if (state.camera.flipH) img.classList.add('flip-h');
+    if (state.camera.frame) img.src = state.camera.frame;
+    frame.appendChild(img);
+    box.appendChild(frame);
+
+    var note = document.createElement('div');
+    note.className = 'sl-hint';
+    note.id = 'camera-note';
+    note.textContent = state.camera.error || (state.camera.frame ? '' : 'Open this to look.');
+    box.appendChild(note);
+
+    box.addEventListener('toggle', function () {
+      state.camera.open = box.open;
+      cameraWatch(box.open);
+    });
+    body.appendChild(box);
+    if (box.open) cameraWatch(true);
+  }
+
+  /**
+   * Keep the picture coming while somebody is looking at it, and stop the
+   * moment they are not — a camera polled into the background is a tablet
+   * with a flat battery.
+   */
+  function cameraWatch(on) {
+    if (!on) {
+      if (state.camera.timer) clearTimeout(state.camera.timer);
+      state.camera.timer = null;
+      return;
+    }
+    if (state.camera.timer || !linkReady()) return;
+
+    function ready(where) {
+      state.camera.where = where;
+      var img = el('camera-view');
+      if (!img) return;
+      // A browser can point an image straight at the stream: images have never
+      // needed the printer's permission. Natively there is no image loader on
+      // the network, so frames are fetched one at a time.
+      if (!window.OrcaNet || !window.OrcaNet.isNative()) {
+        img.src = where.stream + (where.stream.indexOf('?') < 0 ? '?' : '&') +
+          't=' + Date.now();
+        img.onerror = function () {
+          state.camera.error = 'No picture from ' + where.stream + '. ' +
+            'If this page is on https and the printer is not, the browser blocks it.';
+          var n = el('camera-note');
+          if (n) n.textContent = state.camera.error;
+        };
+        return;
+      }
+      poll();
+    }
+
+    function poll() {
+      if (!state.camera.open || !linkReady()) return;
+      window.OrcaNet.image(state.camera.where.snapshot).then(function (dataUrl) {
+        state.camera.frame = dataUrl;
+        state.camera.error = '';
+        var img = el('camera-view');
+        if (img) img.src = dataUrl;
+        var n = el('camera-note');
+        if (n && n.textContent) n.textContent = '';
+        state.camera.timer = setTimeout(poll, 900);
+      }, function (err) {
+        state.camera.error = err.message;
+        var n = el('camera-note');
+        if (n) n.textContent = err.message;
+        state.camera.timer = setTimeout(poll, 4000);
+      });
+    }
+
+    if (state.camera.where) { ready(state.camera.where); return; }
+    state.camera.timer = setTimeout(function () { state.camera.timer = null; }, 1);
+    window.OrcaOctoPrint.webcam(linkConfig()).then(function (where) {
+      state.camera.flipH = where.flipH;
+      state.camera.flipV = where.flipV;
+      state.camera.timer = null;
+      ready(where);
+    }, function (err) {
+      state.camera.timer = null;
+      state.camera.error = err.message;
+      var n = el('camera-note');
+      if (n) n.textContent = err.message;
+    });
   }
 
   // ---------------------------------------------------------------------------

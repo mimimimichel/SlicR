@@ -130,6 +130,38 @@
     return text.length;
   }
 
+  /**
+   * One picture from the printer's camera, as something an <img> can show.
+   *
+   * Natively, because a picture is bytes rather than text: Java hands it back
+   * already encoded, and it becomes a data: URL here. In a browser this is not
+   * needed at all — an image element can be pointed straight at the camera,
+   * which is why the caller only reaches for this when there is a bridge.
+   */
+  function image(url) {
+    var a = root.AndroidSlicer;
+    if (!a || typeof a.httpRequestImage !== 'function') {
+      return Promise.reject(new Error('This version of the app cannot fetch pictures.'));
+    }
+    var id = String(nextId++);
+    var promise = new Promise(function (resolve, reject) {
+      pending[id] = { resolve: resolve, reject: reject };
+    });
+    try {
+      a.httpRequestImage(id, url, JSON.stringify({}));
+    } catch (err) {
+      delete pending[id];
+      return Promise.reject(err);
+    }
+    return promise.then(function (result) {
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error('The camera answered ' + result.status + '.');
+      }
+      if (!result.body) throw new Error('The camera sent nothing.');
+      return /^data:/.test(result.body) ? result.body : 'data:image/jpeg;base64,' + result.body;
+    });
+  }
+
   /** Whether printer traffic is going out natively rather than through the page. */
   function isNative() { return !!bridge(); }
 
@@ -164,6 +196,7 @@
   root.OrcaNet = {
     isNative: isNative,
     nativeFetch: nativeFetch,
+    image: image,
     explainBlocked: explainBlocked,
     // Exposed for the tests, which install a bridge of their own.
     install: function () { if (bridge()) root.OrcaFetch = nativeFetch; else delete root.OrcaFetch; }

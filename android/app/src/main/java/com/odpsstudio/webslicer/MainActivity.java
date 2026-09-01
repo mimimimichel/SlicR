@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.webkit.JsResult;
@@ -423,6 +424,52 @@ public class MainActivity extends Activity {
                 return;
             }
             sendRequest(id, method, url, headersJson, null, staged);
+        }
+
+        /**
+         * One frame from the printer's camera, handed back already encoded.
+         *
+         * A picture is bytes, and this bridge carries text, so it crosses as
+         * base64 and becomes a data: URL on the other side. In a browser none
+         * of this is needed — an image element can point straight at a camera.
+         */
+        @JavascriptInterface
+        public void httpRequestImage(final String id, final String url, final String headersJson) {
+            requests.execute(() -> {
+                HttpURLConnection conn = null;
+                try {
+                    conn = (HttpURLConnection) new URL(url).openConnection();
+                    conn.setConnectTimeout(6000);
+                    conn.setReadTimeout(15000);
+                    for (Map.Entry<String, String> h : parseHeaders(headersJson).entrySet()) {
+                        conn.setRequestProperty(h.getKey(), h.getValue());
+                    }
+                    int status = conn.getResponseCode();
+                    if (status < 200 || status >= 300) {
+                        netResult(id, status, "", null);
+                        return;
+                    }
+                    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                    try (InputStream in = conn.getInputStream()) {
+                        byte[] chunk = new byte[32 * 1024];
+                        int read;
+                        // A still, not a stream: enough for a frame and no more,
+                        // so an endless MJPEG feed cannot fill memory.
+                        while ((read = in.read(chunk)) > 0 && buf.size() < 4 * 1024 * 1024) {
+                            buf.write(chunk, 0, read);
+                        }
+                    }
+                    String type = conn.getContentType();
+                    if (type == null || !type.startsWith("image/")) type = "image/jpeg";
+                    String data = "data:" + type + ";base64," +
+                            Base64.encodeToString(buf.toByteArray(), Base64.NO_WRAP);
+                    netResult(id, status, data, null);
+                } catch (Exception e) {
+                    netResult(id, 0, "", e.getMessage() == null ? e.toString() : e.getMessage());
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            });
         }
 
         @JavascriptInterface

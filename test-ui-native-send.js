@@ -60,6 +60,26 @@ function request(method, url, headers, body) {
   // The native side, in Node: it takes requests from the page, makes them
   // itself, and calls the answer back in. Staged bodies arrive in pieces first,
   // exactly as a G-code upload does.
+  // A picture is bytes, so it crosses the bridge already encoded — which is
+  // what Java does with it.
+  await page.exposeFunction('__nativeImage', async (url) => {
+    const u = new URL(url);
+    return new Promise((resolve) => {
+      const req = http.request({ method: 'GET', hostname: u.hostname, port: u.port,
+                                 path: u.pathname + u.search }, (res) => {
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => resolve({
+          status: res.statusCode,
+          body: 'data:' + (res.headers['content-type'] || 'image/jpeg') + ';base64,' +
+                Buffer.concat(chunks).toString('base64')
+        }));
+      });
+      req.on('error', e => resolve({ status: 0, body: '', error: e.message }));
+      req.end();
+    });
+  });
+
   await page.exposeFunction('__nativeRequest', async (method, url, headersJson, body) => {
     const headers = JSON.parse(headersJson || '{}');
     if (body && body.length) headers['Content-Length'] = Buffer.byteLength(body);
@@ -91,6 +111,11 @@ function request(method, url, headers, body) {
         window.__staged.bytes += new TextEncoder().encode(chunk).length;
         window.__staged.pieces++;
         return true;
+      },
+      httpRequestImage(id, url) {
+        window.__nativeImage(url).then(r => {
+          window.OrcaNetResult(id, r.status, r.body, r.error);
+        });
       },
       pendingBytes() { return String(window.__staged.bytes); },
       discardSave() { window.__staged = { text: '', bytes: 0, pieces: 0 }; },
@@ -221,6 +246,41 @@ function request(method, url, headers, body) {
     (cc2Got && cc2Got.size) + ' bytes, ' + (cc2Got && cc2Got.lines) + ' lines)',
     cc2Got && cc2Got.intact === true && cc2Got.lines > 1000,
     JSON.stringify(cc2Got && { name: cc2Got.name, intact: cc2Got.intact, size: cc2Got.size }));
+
+  // --- and the camera, which a page cannot fetch natively either -----------
+  await page.evaluate(([url, key]) => {
+    localStorage.setItem('orca_slicer_octoprint_v1',
+      JSON.stringify({ kind: 'octoprint', url, key, autoStart: false }));
+  }, ['127.0.0.2:5099', 'TESTKEY']);
+  await page.reload();
+  await page.waitForSelector('#btn-slice');
+  await page.click('#btn-panel').catch(() => {});
+  await page.waitForTimeout(250);
+  await page.click('[data-tab="device"]');
+  await page.waitForTimeout(400);
+  await page.locator('#camera-box summary').click();
+  await page.waitForFunction(() => {
+    const img = document.getElementById('camera-view');
+    return img && img.naturalWidth > 0;
+  }, { timeout: 20000 }).catch(() => {});
+  const frame = await page.evaluate(() => {
+    const img = document.getElementById('camera-view');
+    return img ? { scheme: img.src.slice(0, 22), w: img.naturalWidth } : null;
+  });
+  ok('a frame from the camera arrives as bytes, not as a page request (' +
+    (frame && frame.scheme) + ')',
+    frame && /^data:image\//.test(frame.scheme) && frame.w > 0, JSON.stringify(frame));
+
+  // And the file list, which is an ordinary request through the same door.
+  await page.locator('#files-box summary').click();
+  await page.waitForFunction(() => {
+    const n = document.getElementById('files-note');
+    return n && /file/.test(n.textContent) && !/Asking/.test(n.textContent);
+  }, { timeout: 20000 }).catch(() => {});
+  ok('and the files on the machine are listed too (' +
+    await page.locator('#files-box .sl-file').count() + ')',
+    await page.locator('#files-box .sl-file').count() === 2,
+    await page.locator('#files-note').textContent());
 
   ok('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();

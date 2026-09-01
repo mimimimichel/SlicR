@@ -783,6 +783,33 @@ input[type="range"].sl-vrange::-moz-range-thumb {
 }
 .sl-chips span.vendor { border-color: var(--primary); color: var(--primary-hover); }
 
+/* What is already on the printer, and what it can see. */
+.sl-file {
+  border-left: 3px solid var(--border);
+  border-radius: 0 8px 8px 0;
+  background: var(--bg);
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.sl-file .msg { color: var(--text); font-weight: 600; word-break: break-word; }
+.sl-file .why { color: var(--text-muted); margin-top: 2px; }
+
+.sl-camera {
+  margin: 6px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+}
+.sl-camera img { display: block; width: 100%; height: auto; }
+.sl-camera img.flip-h { transform: scaleX(-1); }
+.sl-camera img.flip-v { transform: scaleY(-1); }
+.sl-camera img.flip-h.flip-v { transform: scale(-1, -1); }
+
 .sl-finding {
   border: 1px solid var(--border);
   border-left-width: 3px;
