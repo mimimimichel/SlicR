@@ -1,4 +1,6 @@
 const { chromium } = require('playwright');
+
+const APP = process.env.APP || 'http://localhost:8099/index.html';
 (async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
@@ -6,7 +8,7 @@ const { chromium } = require('playwright');
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-  await page.goto('http://localhost:8099/index.html');
+  await page.goto(APP);
   await page.waitForSelector('#btn-slice');
   await page.click('[data-demo="cube"]');
   await page.waitForFunction(() => !document.getElementById('btn-slice').disabled);
