@@ -560,9 +560,27 @@
     function handleMove(cmd, w, lineNo, raw) {
       counts.moves++;
 
+      // A move with no feedrate runs at whatever the machine was last told,
+      // which after homing is the homing speed and after a previous job is
+      // anybody's guess. Only worth saying once, about the first one.
+      if (w.F === undefined && !st.feed && !st.feedWarned &&
+          (w.X !== undefined || w.Y !== undefined || w.Z !== undefined)) {
+        st.feedWarned = true;
+        add(WARN, 'feed.unset', 'The first move sets no feedrate, so it runs at ' +
+          'whatever speed the machine was last left at', lineNo, raw);
+      }
+
       if (w.F !== undefined) {
         if (!(w.F > 0)) {
           add(ERROR, 'feed.zero', 'Feedrate of ' + w.F + ' — the machine would stall or reject the move', lineNo, raw);
+        } else if (w.F < 6) {
+          // A tenth of a millimetre a second. The machine accepts it and does
+          // it, and from the outside a head creeping at that speed is a head
+          // that has stopped — the print is not failed, it is just never going
+          // to finish.
+          add(ERROR, 'feed.crawl', 'Feedrate of ' + w.F + ' mm/min — ' +
+            (w.F / 60).toFixed(3) + ' mm per second, which looks like a machine ' +
+            'that has stopped rather than one that is printing', lineNo, raw);
         } else {
           st.feed = w.F;
           if (maxFeed && w.F > maxFeed * 2) {

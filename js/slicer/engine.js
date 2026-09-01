@@ -1592,19 +1592,37 @@
         var solidGap = extrusionSpacing(wl.inner, layerPlan[Li].height);
         var monoTop = s.monotonicSurfaces !== 'none' && s.solidPattern === 'lines';
         var monoSolid = s.monotonicSurfaces === 'all' && s.solidPattern === 'lines';
+        /**
+         * Anything narrower than this is filled with loops that follow it
+         * rather than lines laid across it. Three beads is where a run of
+         * parallel lines stops being a surface and starts being a row of
+         * stubs, each one its own stop and start.
+         */
+        function fillSurface(paths, pattern, gap, fillAngle, feature, w, mono, doFit) {
+          if (!paths || !paths.length) return;
+          var split = splitByWidth(paths, gap * 3);
+          if (split.narrow.length) {
+            pushInfill(feats, split.narrow, 'concentric', gap, fillAngle, printZ, feature,
+                       w, lastPoint, null, false, false, 0, false);
+          }
+          if (split.wide.length) {
+            pushInfill(feats, split.wide, pattern, gap, fillAngle, printZ, feature,
+                       w, lastPoint, null, mono, false, 0, doFit);
+          }
+        }
+
         if (myBridge.length) {
           var bridgeAngle = s.bridgeAngleDetection ? bestBridgeAngle(myBridge, wl.bridge, angle) : angle;
-          pushInfill(feats, myBridge, 'lines', wl.bridge, bridgeAngle, printZ, FEATURE.BRIDGE, wl.bridge, lastPoint);
+          fillSurface(myBridge, 'lines', wl.bridge, bridgeAngle, FEATURE.BRIDGE, wl.bridge, false, false);
         }
         if (myInternalBridge.length) {
           // Run these across the infill lines below rather than along them.
           var internalAngle = angle + 90;
-          pushInfill(feats, myInternalBridge, 'lines',
-                     extrusionSpacing(wl.inner, layerPlan[Li].height), internalAngle, printZ,
-                     FEATURE.INTERNAL_BRIDGE, wl.inner, lastPoint);
+          fillSurface(myInternalBridge, 'lines', extrusionSpacing(wl.inner, layerPlan[Li].height),
+                      internalAngle, FEATURE.INTERNAL_BRIDGE, wl.inner, false, false);
         }
-        pushInfill(feats, mySolid, s.solidPattern, solidGap, angle, printZ, FEATURE.SOLID, wl.inner, lastPoint, null, monoSolid, false, 0, true);
-        pushInfill(feats, myTop, s.solidPattern, solidGap, angle, printZ, FEATURE.TOP, wl.inner, lastPoint, null, monoTop, false, 0, true);
+        fillSurface(mySolid, s.solidPattern, solidGap, angle, FEATURE.SOLID, wl.inner, monoSolid, true);
+        fillSurface(myTop, s.solidPattern, solidGap, angle, FEATURE.TOP, wl.inner, monoTop, true);
 
         if (mySparse.length && s.infillDensity > 0) {
           if (lightning) {
@@ -3120,6 +3138,39 @@
     var tighter = span / intervals;
     if (tighter > spacing || tighter < spacing * 0.8) return spacing;
     return tighter;
+  }
+
+  /**
+   * Split a filled region into the parts too narrow to fill with parallel
+   * lines, and the rest.
+   *
+   * A sphere's skin is a ring one or two beads across on every layer. Filled
+   * with lines across it, a ring like that comes out as hundreds of stubs a
+   * millimetre long — on a 50 mm ball, 29 000 separate dabs of plastic, each
+   * one a stop, a hop and a fresh start. Filled with loops that follow it, the
+   * same ring is two or three continuous paths.
+   *
+   * Width is measured as twice the area over the perimeter, which for a ring
+   * is exactly its width and for a disc is its radius.
+   */
+  function splitByWidth(region, limit) {
+    var narrow = [], wide = [];
+    var islands = G.toIslands(region);
+    for (var i = 0; i < islands.length; i++) {
+      var paths = G.islandPaths(islands[i]);
+      var area = G.totalArea(paths), edge = 0;
+      for (var p = 0; p < paths.length; p++) {
+        var path = paths[p];
+        for (var k = 0; k < path.length; k++) {
+          var a = path[k], b = path[(k + 1) % path.length];
+          edge += Math.hypot(a.X - b.X, a.Y - b.Y) / SCALE;
+        }
+      }
+      var width = edge > 0 ? 2 * area / edge : 0;
+      var into = (width > 0 && width < limit) ? narrow : wide;
+      for (p = 0; p < paths.length; p++) into.push(paths[p]);
+    }
+    return { narrow: narrow, wide: wide };
   }
 
   function pushInfill(feats, region, pattern, spacing, angle, z, type, width, from, minLen, monotonic, connect, anchorLen, fit) {

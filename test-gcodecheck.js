@@ -205,6 +205,26 @@ if (vendorK.findings.some(function (f) { return f.code === 'command.unsupported'
   fail++; console.log('  FALSE ALARM: M900 rejected on the X2, whose vendor sets K0.12');
 } else { pass++; console.log('  ok      M900 passes on the X2, whose vendor publishes a K value'); }
 
+// A feedrate so low the machine looks broken. It is not refused by any
+// firmware — it is done, at a tenth of a millimetre a second — and from the
+// outside a head creeping at that speed is a head that has stopped.
+expectCatch('a move at a thousandth of the speed it should be',
+  vocabHead.concat([';LAYER_CHANGE', ';LAYER:0', ';Z:0.2', 'G1 Z0.2 F600',
+    'G1 X100 Y100 E1 F0.001', ';END_GCODE'], vocabTail).join('\n'),
+  x2, 'feed.crawl', 'error');
+// And a move made before any feedrate has been given runs at whatever the
+// machine was last left at, which is nobody's idea of a print speed.
+expectCatch('a move before any feedrate is set',
+  ['G90', 'M82', 'M140 S60', 'M190 S60', 'M104 S200', 'M109 S200', 'G28',
+   ';LAYER_CHANGE', ';LAYER:0', ';Z:0.2', 'G1 Z0.2', 'G1 X100 Y100 E1 F1200',
+   ';END_GCODE', 'M104 S0', 'M140 S0', 'M84'].join('\n'),
+  x2, 'feed.unset', 'warning');
+// Neither fires on an ordinary file.
+var ordinary = C.verify(bodyWith('M204 S800', x2), x2);
+if (ordinary.findings.some(function (f) { return /^feed\./.test(f.code); })) {
+  fail++; console.log('  FALSE ALARM: a plain file was flagged for its feedrates');
+} else { pass++; console.log('  ok      an ordinary file says nothing about feedrates'); }
+
 // But M420 is in the X2's own start script — its bed mesh is switched on
 // there — so the machine plainly knows it.
 var known = C.verify(bodyWith('M420 S1', x2), x2);

@@ -60,9 +60,9 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
 
   const rows = page.locator('#files-box .sl-file');
   ok('the list comes from the machine (' + await rows.count() + ' files)',
-    await rows.count() === 2, String(await rows.count()));
+    await rows.count() === 3, String(await rows.count()));
   const names = await rows.locator('.msg').allTextContents();
-  ok('newest first, and folders flattened away (' + names.join(', ') + ')',
+  ok('newest first, and folders flattened away (' + names.slice(0, 2).join(', ') + ')',
     names[0] === 'bracket v2.gcode' && names[1] === 'benchy.gcode', JSON.stringify(names));
   const facts = await rows.first().locator('.why').textContent();
   ok('each one says how big it is and how long it takes (' + facts + ')',
@@ -144,6 +144,28 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
   await page.waitForTimeout(400);
   ok('and closing it stops the polling',
     await page.evaluate(() => !document.querySelector('#camera-box').open));
+
+  // --- a name from a machine is not markup ---------------------------------
+  // A printer on the network is not a trusted source: its file names are
+  // whatever somebody typed at it, or whatever anything else on the network
+  // put there. The stand-in serves one made of tags, and the panel has to show
+  // it as the text it is.
+  await files.locator('summary').click();
+  await page.waitForTimeout(200);
+  await files.locator('summary').click();
+  await page.waitForFunction(() => {
+    const n = document.getElementById('files-note');
+    return n && !/Asking|Open this/.test(n.textContent);
+  }, { timeout: 20000 });
+  const hostile = await page.evaluate(() => ({
+    ran: !!window.__pwned,
+    elements: document.querySelectorAll('#files-box img, #files-box script, #files-box b').length,
+    shown: Array.from(document.querySelectorAll('#files-box .msg'))
+      .filter(e => /script|img/i.test(e.textContent)).length
+  }));
+  ok('a file name made of tags runs nothing', hostile.ran === false);
+  ok('and becomes no elements', hostile.elements === 0, String(hostile.elements));
+  ok('it is shown as the text it is', hostile.shown > 0, JSON.stringify(hostile));
 
   ok('nothing unexpected in the console', errors.length === 0,
     JSON.stringify(errors.slice(0, 3)));

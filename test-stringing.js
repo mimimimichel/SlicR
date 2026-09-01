@@ -261,6 +261,50 @@ ok('and the estimate stays in the same country (' +
   withMono.stats.seconds < without.stats.seconds * 1.3,
   withMono.stats.seconds + ' vs ' + without.stats.seconds);
 
+// A skin one or two beads across is not a surface you can lay lines across:
+// each line crosses it in a millimetre and stops. A sphere's skin is exactly
+// that on every layer, and filling it with lines gave 29 000 separate dabs of
+// plastic, each one a stop, a hop and a fresh start. Loops that follow the
+// ring instead make it a handful of continuous paths.
+function runsByType(gcode) {
+  var x = 0, y = 0, e = 0, type = '', by = {}, cur = 0;
+  function flush() {
+    if (cur > 0) {
+      by[type] = by[type] || { n: 0, mm: 0 };
+      by[type].n++; by[type].mm += cur;
+    }
+    cur = 0;
+  }
+  gcode.split('\n').forEach(function (raw) {
+    var t = /^;\s*TYPE:(.*)$/i.exec(raw);
+    if (t) { flush(); type = t[1].trim(); }
+    var L = raw.split(';')[0].trim();
+    if (!/^G[01]\b/.test(L)) return;
+    var nx = x, ny = y;
+    var mx = /X(-?[\d.]+)/.exec(L); if (mx) nx = parseFloat(mx[1]);
+    var my = /Y(-?[\d.]+)/.exec(L); if (my) ny = parseFloat(my[1]);
+    var me = /E(-?[\d.]+)/.exec(L);
+    var de = me ? parseFloat(me[1]) - e : 0;
+    if (me) e = parseFloat(me[1]);
+    var d = Math.hypot(nx - x, ny - y);
+    if (de > 0 && d > 0) cur += d; else if (d > 0) flush();
+    x = nx; y = ny;
+  });
+  flush();
+  return by;
+}
+var ballRuns = runsByType(withMono.gcode);
+var skin = ['Top solid infill', 'Solid infill', 'Internal bridge infill']
+  .map(function (k) { return ballRuns[k] || { n: 0, mm: 0 }; })
+  .reduce(function (a, b) { return { n: a.n + b.n, mm: a.mm + b.mm }; }, { n: 0, mm: 0 });
+console.log('  the sphere’s skin: ' + skin.n + ' runs averaging ' +
+  (skin.mm / Math.max(1, skin.n)).toFixed(1) + ' mm');
+ok('a skin a bead or two across is laid in paths, not in dabs (' + skin.n + ' runs)',
+  skin.n < 6000, String(skin.n));
+ok('and each of them is a real run rather than a stub (' +
+   (skin.mm / Math.max(1, skin.n)).toFixed(1) + ' mm)',
+  skin.mm / Math.max(1, skin.n) > 4, (skin.mm / Math.max(1, skin.n)).toFixed(1));
+
 // The point of the ordering has to survive the saving: on a surface with no
 // hole in it, every line still waits for the one beside it.
 var square = [];

@@ -47,6 +47,16 @@ library = {
             "name": "notes.txt", "path": "notes.txt", "type": "text",
             "typePath": ["text"], "origin": "local", "size": 12, "date": 1_750_000_000,
         },
+        {
+            # A name is whatever somebody typed on the machine, and a machine on
+            # the network is not a trusted source. Anything that reaches the
+            # panel as markup rather than as text is a hole.
+            "name": "<img src=x onerror=\"window.__pwned=1\">.gcode",
+            "path": "<img src=x onerror=\"window.__pwned=1\">.gcode",
+            "display": "<b>bold</b> & <script>window.__pwned=1</script>.gcode",
+            "type": "machinecode", "typePath": ["machinecode", "gcode"],
+            "origin": "local", "size": 4096, "date": 1_700_000_000,
+        },
     ],
     "free": "3.2GB",
 }
