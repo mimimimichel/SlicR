@@ -222,9 +222,16 @@
 
     for (var L = 0; L < planes.length; L++) {
       var z = planes[L];
-      while (cursor < triCount && minZ[orderArr[cursor]] <= z) active.push(orderArr[cursor++]);
+      // Which triangles this plane could touch. The margin matters: a plane
+      // that lands a hair above a ring of vertices — which is what happens
+      // whenever the layer height divides into the model's own spacing, and
+      // that is most models — would otherwise drop every triangle below the
+      // ring, while every triangle above it contributes nothing (its on-plane
+      // vertices are counted as above, just below). The layer came out empty,
+      // and the print had a hole in the middle of it.
+      while (cursor < triCount && minZ[orderArr[cursor]] <= z + EPS) active.push(orderArr[cursor++]);
       for (var a = active.length - 1; a >= 0; a--) {
-        if (maxZ[active[a]] < z) { active[a] = active[active.length - 1]; active.pop(); }
+        if (maxZ[active[a]] < z - EPS) { active[a] = active[active.length - 1]; active.pop(); }
       }
       result[L] = contoursAtZ(positions, active, z);
       if (onProgress && (L & 15) === 0) onProgress(L / planes.length);

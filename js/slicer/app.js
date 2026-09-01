@@ -2514,11 +2514,36 @@
    * upload — is the caller's business.
    */
   function streamToAndroid(filename, gcode, onError) {
-    var CHUNK = 256 * 1024;
+    // Smaller pieces than the bridge's limit, whatever that limit turns out to
+    // be on a given device: a model's G-code is tens of megabytes where the
+    // demo cube is a quarter of one, so this path only ever runs long for the
+    // files that matter most.
+    var CHUNK = 64 * 1024;
     try {
       if (!window.AndroidSlicer.beginSave(filename)) throw new Error('beginSave refused');
-      for (var i = 0; i < gcode.length; i += CHUNK) {
-        if (!window.AndroidSlicer.appendSave(gcode.slice(i, i + CHUNK))) throw new Error('appendSave refused');
+      var i = 0;
+      while (i < gcode.length) {
+        var end = Math.min(i + CHUNK, gcode.length);
+        // Never cut between the two halves of a surrogate pair: the two pieces
+        // would each become a replacement character on the way across.
+        if (end < gcode.length) {
+          var code = gcode.charCodeAt(end - 1);
+          if (code >= 0xd800 && code <= 0xdbff) end--;
+        }
+        if (!window.AndroidSlicer.appendSave(gcode.slice(i, end))) throw new Error('appendSave refused');
+        i = end;
+      }
+
+      // Count what arrived. Everything above can succeed and still lose bytes
+      // if a piece is dropped in the bridge, and a G-code file that is missing
+      // its second half stops the printer mid-print with the heaters on.
+      var expected = byteLength(gcode);
+      var arrived = window.AndroidSlicer.pendingBytes
+        ? parseInt(window.AndroidSlicer.pendingBytes(), 10) : expected;
+      if (arrived !== expected) {
+        if (window.AndroidSlicer.discardSave) window.AndroidSlicer.discardSave();
+        throw new Error('only ' + arrived.toLocaleString() + ' of ' +
+          expected.toLocaleString() + ' bytes arrived — the file was not saved');
       }
       return true;
     } catch (err) {
@@ -2528,9 +2553,21 @@
     }
   }
 
+  /** The size of a string once it is written out as UTF-8. */
+  function byteLength(text) {
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).length;
+    if (typeof Blob !== 'undefined') return new Blob([text]).size;
+    return text.length;
+  }
+
   function exportViaAndroid(filename, gcode) {
     if (streamToAndroid(filename, gcode)) window.AndroidSlicer.endSave();
   }
+
+  // Handing a file to Android happens inside the app, where a test has no
+  // download to intercept and no native side to inspect. This is the one seam
+  // that lets it be driven from outside with a stand-in bridge.
+  window.OrcaSlicerTest = { streamToAndroid: streamToAndroid, byteLength: byteLength };
 
   /** Android back button: close the settings sheet before leaving the app. */
   window.OrcaAndroidBack = function () {

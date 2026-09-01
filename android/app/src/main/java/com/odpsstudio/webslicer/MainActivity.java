@@ -71,6 +71,8 @@ public class MainActivity extends Activity {
     private File pendingGcodeFile;
     private String pendingGcodeName;
     private FileOutputStream gcodeStream;
+    /** Bytes actually written for the file being streamed, so the page can check. */
+    private long pendingGcodeBytes;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -257,6 +259,7 @@ public class MainActivity extends Activity {
                 pendingGcodeName = sanitise(filename);
                 pendingGcodeFile = new File(dir, "pending.gcode");
                 gcodeStream = new FileOutputStream(pendingGcodeFile);
+                pendingGcodeBytes = 0;
                 return true;
             } catch (IOException e) {
                 Log.e(TAG, "beginSave failed", e);
@@ -269,13 +272,36 @@ public class MainActivity extends Activity {
         public boolean appendSave(String chunk) {
             if (gcodeStream == null || chunk == null) return false;
             try {
-                gcodeStream.write(chunk.getBytes(StandardCharsets.UTF_8));
+                byte[] bytes = chunk.getBytes(StandardCharsets.UTF_8);
+                gcodeStream.write(bytes);
+                gcodeStream.flush();
+                pendingGcodeBytes += bytes.length;
                 return true;
             } catch (IOException e) {
                 Log.e(TAG, "appendSave failed", e);
                 discardPendingGcode();
                 return false;
             }
+        }
+
+        /**
+         * How many bytes have arrived. A megabytes-long file crosses this
+         * bridge in dozens of pieces; the page compares this with what it sent
+         * so that a piece lost on the way is an error the user sees, not a
+         * G-code file that stops halfway through the print.
+         *
+         * A string, because the bridge marshals numbers loosely and this one
+         * has to be exact.
+         */
+        @JavascriptInterface
+        public String pendingBytes() {
+            return String.valueOf(pendingGcodeBytes);
+        }
+
+        /** Abandon a transfer that did not arrive intact. */
+        @JavascriptInterface
+        public void discardSave() {
+            discardPendingGcode();
         }
 
         @JavascriptInterface
@@ -648,6 +674,7 @@ public class MainActivity extends Activity {
 
     private void discardPendingGcode() {
         closeGcodeStream();
+        pendingGcodeBytes = 0;
         if (pendingGcodeFile != null) {
             if (!pendingGcodeFile.delete()) pendingGcodeFile.deleteOnExit();
             pendingGcodeFile = null;

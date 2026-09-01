@@ -15,7 +15,8 @@ require('./js/slicer/lightning.js');
 require('./js/slicer/treesupport.js');
 require('./js/slicer/template.js');
 require('./js/slicer/gcodecheck.js');
-var E = globalThis.OrcaEngine, P = globalThis.OrcaPresets;
+require('./js/slicer/gcodeview.js');
+var E = globalThis.OrcaEngine, P = globalThis.OrcaPresets, V = globalThis.OrcaGcodeView;
 
 // A part with a bit of everything: overhang, thin rib, hole, flat top.
 function part(cx, cy, scale) {
@@ -68,9 +69,20 @@ printers.forEach(function (key) {
 
   var bad = r.report.findings.filter(function (f) { return f.severity !== 'info'; });
   var nan = r.gcode.split('\n').some(function (l) { return /^[GM]\d/.test(l) && /NaN|undefined|Infinity/.test(l); });
-  if (bad.length || nan || !(r.stats.volumeCm3 > 0)) {
+
+  // And the file itself, read the way a printer reads it. A verifier that only
+  // looks for dangerous lines will pass a file with nothing in it.
+  var read = V.parse(r.gcode);
+  var thin = read.stats.segments < 200 ||
+             read.stats.layers < r.layers.length ||
+             !(read.stats.filamentMm > r.stats.filamentMm * 0.5) ||
+             !(read.stats.maxZ > 1);
+
+  if (bad.length || nan || thin || !(r.stats.volumeCm3 > 0)) {
     fail++;
     console.log('  FAIL ' + key + (nan ? ' -> NaN in commands' : '') +
+      (thin ? ' -> reads back as ' + JSON.stringify(read.stats) + ' for ' +
+        r.layers.length + ' planned layers' : '') +
       (bad.length ? ' -> [' + bad[0].severity + '] ' + bad[0].code + ': ' + bad[0].message : ''));
   } else {
     pass++;

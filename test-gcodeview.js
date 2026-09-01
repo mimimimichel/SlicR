@@ -222,5 +222,137 @@ ok('a spliced-in thumbnail changes nothing about what is read',
   thumbed.stats.segments > 500 && thumbed.header.filamentDiameter === 1.75,
   JSON.stringify(thumbed.header));
 
+// ---------------------------------------------------------------------------
+// Layers that go missing.
+//
+// A slice plane that lands on a ring of vertices is not a rare case: it happens
+// whenever the layer height divides into the spacing of the model's own
+// geometry, which is most of what comes out of CAD. The plane sits an ulp above
+// the ring, the triangles below it get culled for ending below the plane, and
+// the ones above contribute nothing because their on-plane vertices count as
+// above — so the layer came out empty and the print had a hole through it. The
+// demo cube never showed it: its only horizontal geometry is the top and the
+// bottom.
+// ---------------------------------------------------------------------------
+
+/** A drum with horizontal rings of vertices every `ring` millimetres. */
+function ringed(cx, cy, height, radius, ring) {
+  var t = [];
+  function tri(a, b, c) { t.push(a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]); }
+  var N = 64, rows = Math.round(height / ring);
+  for (var i = 0; i < N; i++) {
+    var a0 = i / N * 2 * Math.PI, a1 = (i + 1) / N * 2 * Math.PI;
+    for (var j = 0; j < rows; j++) {
+      var z0 = j * ring, z1 = (j + 1) * ring;
+      tri([cx+Math.cos(a0)*radius, cy+Math.sin(a0)*radius, z0],
+          [cx+Math.cos(a1)*radius, cy+Math.sin(a1)*radius, z0],
+          [cx+Math.cos(a1)*radius, cy+Math.sin(a1)*radius, z1]);
+      tri([cx+Math.cos(a0)*radius, cy+Math.sin(a0)*radius, z0],
+          [cx+Math.cos(a1)*radius, cy+Math.sin(a1)*radius, z1],
+          [cx+Math.cos(a0)*radius, cy+Math.sin(a0)*radius, z1]);
+    }
+    tri([cx, cy, 0], [cx+Math.cos(a1)*radius, cy+Math.sin(a1)*radius, 0],
+        [cx+Math.cos(a0)*radius, cy+Math.sin(a0)*radius, 0]);
+    tri([cx, cy, height], [cx+Math.cos(a0)*radius, cy+Math.sin(a0)*radius, height],
+        [cx+Math.cos(a1)*radius, cy+Math.sin(a1)*radius, height]);
+  }
+  return new Float32Array(t);
+}
+
+[0.2, 0.4, 1, 1.25, 2].forEach(function (ring) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'q020');
+  var r = E.slice({ positions: ringed(s.bedX / 2, s.bedY / 2, 20, 10, ring), settings: s },
+    function () {});
+
+  // Every layer the slicer planned has to be in the text, at the height it
+  // planned it. A missing one prints the next layer over thin air.
+  var written = r.gcode.split('\n')
+    .filter(function (l) { return /^;Z:/.test(l); })
+    .map(function (l) { return parseFloat(l.slice(3)); });
+  var missing = r.layers.map(function (l) { return l.z; }).filter(function (z) {
+    return !written.some(function (w) { return Math.abs(w - z) < 1e-6; });
+  });
+  ok('a model with a ring of vertices every ' + ring + ' mm keeps every layer (' +
+    written.length + ' of ' + r.layers.length + ')',
+    missing.length === 0 && written.length === r.layers.length,
+    missing.length + ' missing: ' + missing.slice(0, 4).map(function (z) { return z.toFixed(3); }).join(', '));
+
+  // And the file reads back with no gap in it: consecutive layers, no jump.
+  var read = V.parse(r.gcode);
+  var gaps = [];
+  for (var i = 2; i < read.layers.length; i++) {
+    var rise = read.layers[i].z - read.layers[i - 1].z;
+    if (rise > s.layerHeight * 1.5) gaps.push(read.layers[i - 1].z.toFixed(2) + '→' + read.layers[i].z.toFixed(2));
+  }
+  ok('  and the printed heights step evenly all the way up', gaps.length === 0,
+    JSON.stringify(gaps.slice(0, 4)));
+});
+
+// ---------------------------------------------------------------------------
+// A real model is not a cube: it has curves, overhangs and features switched
+// on. Each of these produces a file, and each file has to read back as a part.
+// ---------------------------------------------------------------------------
+
+/** A shape with curvature, an overhang and a flat top — a model, not a box. */
+function vase(cx, cy) {
+  var t = [];
+  function tri(a, b, c) { t.push(a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]); }
+  var H = 30, N = 48, M = 24;
+  function r(z) { return 12 * (0.5 + 0.5 * Math.sin(Math.PI * (0.2 + 0.7 * z / H))); }
+  for (var i = 0; i < N; i++) {
+    var a0 = i / N * 2 * Math.PI, a1 = (i + 1) / N * 2 * Math.PI;
+    for (var j = 0; j < M; j++) {
+      var z0 = j / M * H, z1 = (j + 1) / M * H;
+      tri([cx+Math.cos(a0)*r(z0), cy+Math.sin(a0)*r(z0), z0],
+          [cx+Math.cos(a1)*r(z0), cy+Math.sin(a1)*r(z0), z0],
+          [cx+Math.cos(a1)*r(z1), cy+Math.sin(a1)*r(z1), z1]);
+      tri([cx+Math.cos(a0)*r(z0), cy+Math.sin(a0)*r(z0), z0],
+          [cx+Math.cos(a1)*r(z1), cy+Math.sin(a1)*r(z1), z1],
+          [cx+Math.cos(a0)*r(z1), cy+Math.sin(a0)*r(z1), z1]);
+    }
+    tri([cx, cy, 0], [cx+Math.cos(a1)*r(0), cy+Math.sin(a1)*r(0), 0],
+        [cx+Math.cos(a0)*r(0), cy+Math.sin(a0)*r(0), 0]);
+    tri([cx, cy, H], [cx+Math.cos(a0)*r(H), cy+Math.sin(a0)*r(H), H],
+        [cx+Math.cos(a1)*r(H), cy+Math.sin(a1)*r(H), H]);
+  }
+  return new Float32Array(t);
+}
+
+var FEATURES = [
+  ['plain', function () {}],
+  ['supports', function (s) { s.supportEnable = true; }],
+  ['tree supports', function (s) { s.supportEnable = true; s.supportStyle = 'tree'; }],
+  ['brim', function (s) { s.adhesion = 'brim'; }],
+  ['raft', function (s) { s.adhesion = 'raft'; }],
+  ['ironing', function (s) { s.ironing = 'top'; }],
+  ['fuzzy skin', function (s) { s.fuzzySkin = 'outer'; }],
+  ['arachne walls', function (s) { s.wallGenerator = 'arachne'; }],
+  ['adaptive layers', function (s) { s.adaptiveLayers = true; }],
+  ['scarf seam', function (s) { s.seamScarf = true; }],
+  ['monotonic surfaces', function (s) { s.monotonicSurfaces = 'all'; }],
+  ['spiral vase', function (s) { s.spiralVase = true; s.topLayers = 0; s.infillDensity = 0; s.perimeters = 1; }],
+  ['arc fitting', function (s) { s.arcFitting = true; }],
+  ['everything at once', function (s) {
+    s.supportEnable = true; s.supportStyle = 'tree'; s.ironing = 'top'; s.adhesion = 'brim';
+    s.fuzzySkin = 'outer'; s.wallGenerator = 'arachne'; s.seamScarf = true;
+    s.monotonicSurfaces = 'all'; s.gapFill = true; s.internalBridges = true;
+  }]
+];
+
+FEATURES.forEach(function (f) {
+  var s = P.buildSettings('artillery_x2', 'pla', 'q020');
+  f[1](s);
+  var r;
+  try { r = E.slice({ positions: vase(s.bedX / 2, s.bedY / 2), settings: s }, function () {}); }
+  catch (err) { ok('a model with ' + f[0] + ' slices', false, err.message); return; }
+  var read = V.parse(r.gcode);
+  var nan = /NaN|undefined|Infinity/.test(r.gcode);
+  ok('a model with ' + f[0] + ' reads back as a part (' + read.stats.layers + ' layers, ' +
+    read.stats.segments + ' moves, ' + Math.round(read.stats.filamentMm) + ' mm)',
+    !nan && read.stats.segments > 200 && read.stats.layers >= r.layers.length &&
+    read.stats.maxZ > 20 && read.stats.filamentMm > r.stats.filamentMm * 0.5,
+    JSON.stringify(read.stats) + ' for ' + r.layers.length + ' planned' + (nan ? ' NaN!' : ''));
+});
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
