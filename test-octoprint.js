@@ -271,6 +271,32 @@ O.test(cfg, { fetch: f1 }).then(function (info) {
 }).then(function (w) {
   ok('an older one is read from where it used to be, absolute address and all',
     w.stream === 'http://cam.lan:8080/?action=stream', w.stream);
+  // The address OctoPrint reports is the one its own machine would use, and a
+  // stock OctoPi reports localhost. Read on a tablet that means the tablet,
+  // which has no camera on it: the host has to become the printer's, and
+  // nothing else about the address may move.
+  return O.webcam(cfg, { fetch: stub({ status: 200, body: JSON.stringify({
+    plugins: { classicwebcam: { stream: 'http://localhost:5001/?action=stream',
+                                snapshot: 'http://127.0.0.1:5001/?action=snapshot' } } }) }) });
+}).then(function (w) {
+  ok('a camera the printer calls localhost is asked of the printer, port kept',
+    w.stream === 'http://octopi.local:5001/?action=stream', w.stream);
+  ok('and 127.0.0.1 is the same mistake by another name',
+    w.snapshot === 'http://octopi.local:5001/?action=snapshot', w.snapshot);
+  ok('with the usual address kept back in case that one answers nothing',
+    w.fallback && w.fallback.snapshot === 'http://octopi.local/webcam/?action=snapshot',
+    JSON.stringify(w.fallback));
+  return O.webcam(cfg, { fetch: stub({ status: 200, body: JSON.stringify({
+    webcam: { streamUrl: 'http://cam.lan:8080/?action=stream' } }) }) });
+}).then(function (w) {
+  ok('a camera that names a real host of its own is left exactly as it is',
+    w.stream === 'http://cam.lan:8080/?action=stream', w.stream);
+  return O.webcam({ url: 'http://localhost:5000', key: 'K' },
+    { fetch: stub({ status: 200, body: JSON.stringify({
+      webcam: { streamUrl: 'http://localhost:8080/?action=stream' } }) }) });
+}).then(function (w) {
+  ok('and on a machine that really is here, that is still the right answer',
+    w.stream === 'http://localhost:8080/?action=stream', w.stream);
   return O.webcam(cfg, { fetch: stub({ status: 404, body: '' }) });
 }).then(function (w) {
   ok('and a machine that will not say still gets the usual address tried',

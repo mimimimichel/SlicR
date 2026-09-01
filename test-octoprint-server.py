@@ -137,11 +137,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/files"):
             return self._send(200, library)
         if self.path == "/api/settings":
-            # The 1.9-and-later shape: the webcam moved under its plugin.
+            # The 1.9-and-later shape: the webcam moved under its plugin. The
+            # addresses are absolute and say localhost, because that is what a
+            # stock OctoPi reports — it is describing where the camera is from
+            # where it is standing, which is not where the tablet is standing.
+            here = "http://localhost:%d" % PORT
             return self._send(200, {
                 "plugins": {"classicwebcam": {
-                    "stream": "/webcam/?action=stream",
-                    "snapshot": "/webcam/?action=snapshot",
+                    "stream": here + "/webcam/?action=stream",
+                    "snapshot": here + "/webcam/?action=snapshot",
                     "flipH": False, "flipV": True, "rotate90": False,
                 }},
                 "webcam": {},

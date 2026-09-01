@@ -358,7 +358,7 @@
       var legacy = (s && s.webcam) || {};
       var stream = classic.stream || legacy.streamUrl || '/webcam/?action=stream';
       var snapshot = classic.snapshot || legacy.snapshotUrl || '/webcam/?action=snapshot';
-      return {
+      var where = {
         stream: absolute(cfg, stream),
         snapshot: absolute(cfg, snapshot),
         flipH: !!(classic.flipH || legacy.flipH),
@@ -366,6 +366,15 @@
         rotate90: !!(classic.rotate90 || legacy.rotate90),
         declared: !!(classic.stream || legacy.streamUrl)
       };
+      // A declared address can simply be wrong — a camera moved, a plugin
+      // configured for a machine that is no longer there. The usual one is
+      // worth a second try before giving up on the picture entirely.
+      var usual = {
+        stream: absolute(cfg, '/webcam/?action=stream'),
+        snapshot: absolute(cfg, '/webcam/?action=snapshot')
+      };
+      if (where.snapshot !== usual.snapshot) where.fallback = usual;
+      return where;
     }, function () {
       // An older or locked-down build may not hand over its settings at all;
       // the usual addresses are still worth a try.
@@ -377,12 +386,45 @@
     });
   }
 
-  /** A URL from the settings may be relative to the printer, or absolute. */
+  /** Hosts that mean "this machine" — and never the same machine twice. */
+  function isLoopback(host) {
+    var h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+    return h === 'localhost' || h === '::1' || h === '0.0.0.0' ||
+      /^127\./.test(h) || /\.localhost$/.test(h);
+  }
+
+  /** The host part of an address, port and scheme stripped off. */
+  function hostOf(url) {
+    var m = /^https?:\/\/([^\/?#]+)/i.exec(String(url || ''));
+    if (!m) return '';
+    var authority = m[1].replace(/^[^@]*@/, '');
+    var bracket = /^(\[[^\]]+\])/.exec(authority);
+    if (bracket) return bracket[1];
+    return authority.split(':')[0];
+  }
+
+  /**
+   * A URL from the settings may be relative to the printer, or absolute.
+   *
+   * An absolute one is not necessarily reachable, though. OctoPrint reports the
+   * camera address as its own machine sees it, and on a stock OctoPi that is
+   * `http://localhost:8080/?action=stream` or similar — localhost being the Pi.
+   * Read here, on a tablet, that address points at the tablet, which has no
+   * camera and nothing listening, so the request fails before it leaves. The
+   * host is the only part that is wrong: the port, path and scheme are the
+   * printer's own and stay exactly as they were, and only the machine they are
+   * asked of changes, from the printer's idea of "here" to ours of "there".
+   */
   function absolute(cfg, url) {
     var u = String(url || '');
-    if (/^https?:\/\//i.test(u)) return u;
     var base = normaliseUrl(cfg && cfg.url);
-    return base + (u.charAt(0) === '/' ? '' : '/') + u;
+    if (!/^https?:\/\//i.test(u)) {
+      return base + (u.charAt(0) === '/' ? '' : '/') + u;
+    }
+    var printer = hostOf(base);
+    if (!printer || !isLoopback(hostOf(u))) return u;
+    return u.replace(/^(https?:\/\/)(?:[^@\/?#]*@)?(\[[^\]]+\]|[^:\/?#]+)/i,
+      function (all, scheme) { return scheme + printer; });
   }
 
   var api = {

@@ -128,6 +128,13 @@ const KEY = process.env.OCTO_KEY || 'TESTKEY';
   });
   ok('and the picture arrives (' + (shown && shown.w) + '×' + (shown && shown.h) + ')',
     shown && shown.w > 0 && shown.h > 0, JSON.stringify(shown));
+  // The stand-in reports its camera at localhost, as a stock OctoPi does. That
+  // is where the camera is from where the printer stands; from here it is the
+  // tablet, which has no camera on it. The picture has to be asked of the
+  // printer, and the address on screen is the proof of it.
+  ok('asked of the printer rather than of ourselves (' + (shown && shown.src) + ')',
+    shown && shown.src.indexOf(OCTO) >= 0 && !/localhost|127\.0\.0\.1/.test(shown.src),
+    JSON.stringify(shown && shown.src));
   ok('turned the way the printer says it should be',
     shown && /flip-v/.test(shown.flipped), JSON.stringify(shown && shown.flipped));
 

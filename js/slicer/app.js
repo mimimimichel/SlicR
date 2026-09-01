@@ -729,6 +729,11 @@
         img.src = where.stream + (where.stream.indexOf('?') < 0 ? '?' : '&') +
           't=' + Date.now();
         img.onerror = function () {
+          if (where.fallback) {
+            var back = where.fallback;
+            ready({ stream: back.stream, snapshot: back.snapshot });
+            return;
+          }
           state.camera.error = 'No picture from ' + where.stream + '. ' +
             'If this page is on https and the printer is not, the browser blocks it.';
           var n = el('camera-note');
@@ -750,9 +755,18 @@
         if (n && n.textContent) n.textContent = '';
         state.camera.timer = setTimeout(poll, 900);
       }, function (err) {
-        state.camera.error = err.message;
+        // The address OctoPrint reports is not always one that answers. If it
+        // gave us a second one to try, try it rather than repeating a request
+        // that has already failed.
+        var back = state.camera.where.fallback;
+        if (back) {
+          state.camera.where = { stream: back.stream, snapshot: back.snapshot };
+          state.camera.timer = setTimeout(poll, 200);
+          return;
+        }
+        state.camera.error = err.message + ' Tried ' + state.camera.where.snapshot + '.';
         var n = el('camera-note');
-        if (n) n.textContent = err.message;
+        if (n) n.textContent = state.camera.error;
         state.camera.timer = setTimeout(poll, 4000);
       });
     }
