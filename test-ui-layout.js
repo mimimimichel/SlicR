@@ -229,6 +229,53 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
     ok('with the tools that need a model greyed out again', await disabled('#tool-move'));
   }
 
+  // --- the preview, which is what the print is judged by ---------------------
+  // The slider has to show the layer it says it is showing: a preview that is
+  // one layer out, or that stops short of the top, is a preview that hides the
+  // thing somebody opened it to look at.
+  await page.click('[data-demo="cube"]');
+  await page.waitForFunction(() => !document.getElementById('btn-slice').disabled,
+    { timeout: 30000 });
+  await page.waitForTimeout(300);
+  await page.click('#btn-slice');
+  await page.waitForFunction(() => !document.getElementById('btn-export').disabled,
+    { timeout: 300000 });
+  await page.waitForTimeout(400);
+  const top = await page.evaluate(() => ({
+    max: +document.getElementById('layer-range').max,
+    at: +document.getElementById('layer-range').value,
+    num: document.getElementById('layer-num').textContent,
+    z: document.getElementById('layer-z').textContent
+  }));
+  // A 20 mm cube at 0.25 + 0.2 is 101 layers, the last of them at 20.00 mm.
+  ok('the preview opens at the top of the print (' + top.num + ' at ' + top.z + ')',
+    top.at === top.max && /101/.test(top.num) && /20\.00/.test(top.z), JSON.stringify(top));
+  await page.evaluate(() => {
+    const r = document.getElementById('layer-range');
+    r.value = String(Math.floor(+r.max / 2));
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  const half = await page.evaluate(() => ({
+    num: document.getElementById('layer-num').textContent,
+    z: document.getElementById('layer-z').textContent
+  }));
+  ok('and the middle of the slider is the middle of the print (' + half.num + ' at ' +
+     half.z + ')', /51/.test(half.num) && /10\.0/.test(half.z), JSON.stringify(half));
+
+  // Travel is off by default and has to actually draw something.
+  const beforeShot = await page.locator('#sl-canvas').screenshot();
+  await page.click('#btn-travels');
+  await page.waitForTimeout(400);
+  ok('the travel button turns on', await page.evaluate(() =>
+    document.getElementById('btn-travels').classList.contains('on')));
+  const afterShot = await page.locator('#sl-canvas').screenshot();
+  ok('and something new appears on the plate', !beforeShot.equals(afterShot));
+  await page.click('#btn-travels');
+  await page.waitForTimeout(300);
+  ok('and goes away again', !(await page.evaluate(() =>
+    document.getElementById('btn-travels').classList.contains('on'))));
+
   // --- and when the browser will not help -----------------------------------
   // Some WebViews refuse to serve a worker script at all. The app is supposed
   // to notice and slice in the page instead, and the person is not supposed to
