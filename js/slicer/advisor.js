@@ -446,6 +446,104 @@
   }
 
   // ---------------------------------------------------------------------------
+  // The plate, as it is arranged
+  // ---------------------------------------------------------------------------
+
+  /**
+   * What is wrong with where the models are standing.
+   *
+   * Two solids in the same place are printed as one — every slicer unions
+   * them, and that is the right answer — but a person who loaded two models
+   * and got one object's worth of plastic deserves to be told which two, and
+   * by how much. The same pass catches a part hanging off the plate, which the
+   * G-code check will refuse later and is better said now.
+   *
+   * Boxes, not meshes: a bounding box is conservative, so the overlap is
+   * reported as the share of the smaller box that the two have in common and
+   * only when that share is large enough to be a real intersection rather than
+   * two shapes standing close.
+   *
+   * @param {Array<{name?:string, bbox?:{min:{x,y,z}, max:{x,y,z}}}>} models
+   * @param {object} s   the full settings object
+   */
+  function plateNotes(models, s) {
+    var out = [];
+    if (!models || models.length < 1 || !s) return out;
+
+    var boxes = [];
+    for (var i = 0; i < models.length; i++) {
+      var m = models[i];
+      if (!m || !m.bbox || !m.bbox.min || !m.bbox.max) continue;
+      boxes.push({ name: m.name || ('model ' + (i + 1)), lo: m.bbox.min, hi: m.bbox.max });
+    }
+
+    // --- off the plate ------------------------------------------------------
+    for (i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      var off = b.lo.x < -0.01 || b.lo.y < -0.01 ||
+                b.hi.x > s.bedX + 0.01 || b.hi.y > s.bedY + 0.01;
+      if (off) {
+        out.push({ key: null, label: 'Off the plate: ' + b.name,
+          why: b.name + ' reaches ' + Math.round(b.lo.x) + '–' + Math.round(b.hi.x) + ' by ' +
+            Math.round(b.lo.y) + '–' + Math.round(b.hi.y) + ' mm on a plate that is ' +
+            s.bedX + ' by ' + s.bedY + '. The part of it that is outside cannot be printed, ' +
+            'and the check will refuse the file rather than let the head go there.',
+          kind: 'warning' });
+      }
+      if (b.hi.z > s.bedZ + 0.01) {
+        out.push({ key: null, label: 'Taller than the machine: ' + b.name,
+          why: b.name + ' stands ' + Math.round(b.hi.z) + ' mm against ' + s.bedZ +
+            ' mm of travel.', kind: 'warning' });
+      }
+    }
+
+    // --- in the same place --------------------------------------------------
+    function span(a0, a1, b0, b1) { return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); }
+    for (i = 0; i < boxes.length; i++) {
+      for (var j = i + 1; j < boxes.length; j++) {
+        var a = boxes[i], c = boxes[j];
+        var ox = span(a.lo.x, a.hi.x, c.lo.x, c.hi.x);
+        var oy = span(a.lo.y, a.hi.y, c.lo.y, c.hi.y);
+        var oz = span(a.lo.z, a.hi.z, c.lo.z, c.hi.z);
+        if (ox <= 0 || oy <= 0 || oz <= 0) continue;
+        var shared = ox * oy * oz;
+        var volA = Math.max(1e-6, (a.hi.x - a.lo.x) * (a.hi.y - a.lo.y) * (a.hi.z - a.lo.z));
+        var volC = Math.max(1e-6, (c.hi.x - c.lo.x) * (c.hi.y - c.lo.y) * (c.hi.z - c.lo.z));
+        var share = shared / Math.min(volA, volC);
+        if (share < 0.25) continue;
+        out.push({ key: null, label: 'Two models in the same place',
+          why: a.name + ' and ' + c.name + ' share ' + Math.round(share * 100) + '% of the ' +
+            'space the smaller one occupies. They will be printed as one solid — which is ' +
+            'what every slicer does with two shapes in the same place — so the file will ' +
+            'hold less plastic than two parts, and neither will come out on its own.',
+          kind: 'warning' });
+      }
+    }
+
+    // Printing one at a time needs room between them, not just no overlap.
+    if (s.printSequence === 'object' && boxes.length > 1) {
+      for (i = 0; i < boxes.length; i++) {
+        for (j = i + 1; j < boxes.length; j++) {
+          var p = boxes[i], q = boxes[j];
+          var gapX = Math.max(p.lo.x - q.hi.x, q.lo.x - p.hi.x);
+          var gapY = Math.max(p.lo.y - q.hi.y, q.lo.y - p.hi.y);
+          var gap = Math.max(gapX, gapY);
+          var need = s.extruderClearanceRadius || 45;
+          if (gap >= need) continue;
+          out.push({ key: null, label: 'Too close to print one at a time',
+            why: p.name + ' and ' + q.name + ' are ' + Math.max(0, Math.round(gap)) + ' mm ' +
+              'apart, and the extruder sweeps ' + need + ' mm around whatever it is printing. ' +
+              'Printing them one at a time means the head has to come back down beside a ' +
+              'finished part.',
+            kind: 'warning' });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // What went wrong last time
   // ---------------------------------------------------------------------------
 
@@ -763,7 +861,7 @@
     return out;
   }
 
-  var api = { measure: measure, advise: advise, review: review,
+  var api = { measure: measure, advise: advise, review: review, plateNotes: plateNotes,
               SYMPTOMS: SYMPTOMS, remedies: remedies };
   root.OrcaAdvisor = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

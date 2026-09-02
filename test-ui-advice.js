@@ -161,6 +161,65 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   ok('choosing it again closes it',
     await page.locator('#fix-box .sl-advice-item').count() === 0);
 
+  // --- how the models are standing -----------------------------------------
+  // Two solids in the same place are printed as one — which is what every
+  // slicer does — so somebody who loaded two models and got one object's worth
+  // of plastic deserves to be told which two, and by how much.
+  const plate = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+  const plateErrors = [];
+  plate.on('pageerror', e => plateErrors.push(e.message));
+  await plate.goto(APP);
+  await plate.waitForSelector('#btn-slice');
+  await plate.setInputFiles('#file-input',
+    ['test-models/cube-a.stl', 'test-models/cube-b.stl']);
+  await plate.waitForFunction(() => !document.getElementById('btn-slice').disabled,
+    { timeout: 60000 });
+  await plate.waitForTimeout(500);
+  const notes = () => plate.evaluate(() =>
+    Array.from(document.querySelectorAll('.sl-advice-item .msg')).map(e => e.textContent));
+  await plate.click('#btn-panel').catch(() => {});
+  await plate.waitForTimeout(400);
+  let onPlate = await notes();
+  ok('two models arranged apart draw no complaint',
+    !onPlate.some(t => /same place/i.test(t)), JSON.stringify(onPlate));
+
+  await plate.click('[data-tab="object"]').catch(() => {});
+  await plate.waitForTimeout(300);
+  for (const idx of [0, 1]) {
+    await plate.evaluate((i) => {
+      const rows = Array.from(document.querySelectorAll('.sl-object'));
+      if (rows[i]) rows[i].click();
+    }, idx);
+    await plate.waitForTimeout(250);
+    await plate.evaluate(() => {
+      const g = Array.from(document.querySelectorAll('details')).find(d =>
+        d.querySelector('summary') &&
+        d.querySelector('summary').textContent.trim().startsWith('Position'));
+      if (!g) return;
+      g.querySelectorAll('.sl-field').forEach(r => {
+        const i = r.querySelector('input[type=number]');
+        if (!i) return;
+        i.value = '128';
+        i.dispatchEvent(new Event('input', { bubbles: true }));
+        i.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+    await plate.waitForTimeout(250);
+  }
+  await plate.click('[data-tab="print"]').catch(() => {});
+  await plate.waitForTimeout(400);
+  onPlate = await notes();
+  ok('two models in the same place are called out',
+    onPlate.some(t => /same place/i.test(t)), JSON.stringify(onPlate));
+  const why = await plate.evaluate(() => {
+    const card = Array.from(document.querySelectorAll('.sl-advice-item'))
+      .find(c => /same place/i.test(c.querySelector('.msg').textContent));
+    return card ? card.querySelector('.why').textContent : '';
+  });
+  ok('and it says by how much', /\d+%/.test(why), why.slice(0, 80));
+  ok('with nothing broken on the way', plateErrors.length === 0, plateErrors.slice(0, 2).join(' | '));
+  await plate.close();
+
   ok('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

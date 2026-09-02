@@ -290,5 +290,48 @@ ok('a machine already sending its linear advance is not told to set it',
   withK.every(function (a) { return !/linear advance/i.test(a.label); }));
 ok('and one that has none is', withoutK.some(function (a) { return /linear advance/i.test(a.label); }));
 
+console.log('\n=== 9. how the models are standing ===');
+// Two solids in the same place are printed as one, which is the right answer
+// and a silent one: the person loaded two models and got one object's worth of
+// plastic. Boxes are conservative, so the share of the smaller one is what is
+// reported, and only when it is large enough to be a real intersection.
+function at(name, x, y, z, w, d, h) {
+  return { name: name, bbox: { min: { x: x, y: y, z: z },
+                               max: { x: x + w, y: y + d, z: z + h } } };
+}
+var plate = P.buildSettings('artillery_x2', 'pla', 'q020');
+function labels(models, over) {
+  var s = plate;
+  if (over) { s = P.buildSettings('artillery_x2', 'pla', 'q020'); for (var k in over) s[k] = over[k]; }
+  return A.plateNotes(models, s).map(function (f) { return f.label; });
+}
+ok('two models side by side draw nothing',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 60, 10, 0, 20, 20, 20)]).length === 0);
+ok('two in the same place are called out',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 10, 10, 0, 20, 20, 20)])
+    .some(function (l) { return /same place/i.test(l); }));
+ok('and the note says how much they share',
+  /100%/.test(A.plateNotes([at('a', 10, 10, 0, 20, 20, 20), at('b', 10, 10, 0, 20, 20, 20)],
+    plate)[0].why));
+// Two shapes standing close are not two shapes in the same place: a bounding
+// box is generous, and saying so on every tight arrangement would be noise.
+ok('boxes that merely touch at a corner are left alone',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 29, 29, 0, 20, 20, 20)]).length === 0);
+ok('one stacked on top of the other, not through it, is left alone',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 10, 10, 20, 20, 20, 20)]).length === 0);
+ok('a part hanging off the plate is called out',
+  labels([at('a', -30, 10, 0, 20, 20, 20)]).some(function (l) { return /off the plate/i.test(l); }));
+ok('and one taller than the machine',
+  labels([at('a', 10, 10, 0, 20, 20, 500)]).some(function (l) { return /taller/i.test(l); }));
+// One at a time needs room for the gantry, not merely no overlap.
+ok('printing one at a time wants room between them',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 60, 10, 0, 20, 20, 20)],
+    { printSequence: 'object' }).some(function (l) { return /too close/i.test(l); }));
+ok('and says nothing when there is room',
+  labels([at('a', 10, 10, 0, 20, 20, 20), at('b', 200, 10, 0, 20, 20, 20)],
+    { printSequence: 'object' }).length === 0);
+ok('an empty plate has nothing to say', A.plateNotes([], plate).length === 0);
+ok('and neither has one with no settings', A.plateNotes([at('a', 0, 0, 0, 1, 1, 1)], null).length === 0);
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

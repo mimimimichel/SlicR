@@ -389,6 +389,11 @@
     // too thick for the nozzle is true of an empty plate too — so the notes on
     // it come first and do not wait for a model.
     var all = window.OrcaAdvisor.review(state.settings);
+    // How the models are standing is its own question, and it needs each of
+    // them rather than the one mesh the slicer sees.
+    if (window.OrcaAdvisor.plateNotes && state.viewer) {
+      all = all.concat(window.OrcaAdvisor.plateNotes(state.viewer.models, state.settings));
+    }
     var shape = currentShape();
     if (shape) all = all.concat(window.OrcaAdvisor.advise(shape, state.settings));
     var list = all.filter(function (a) { return !state.adviceDismissed[adviceId(a)]; });
