@@ -3057,6 +3057,60 @@
   // that lets it be driven from outside with a stand-in bridge.
   window.OrcaSlicerTest = { streamToAndroid: streamToAndroid, byteLength: byteLength };
 
+  /**
+   * A model handed to the app from somewhere else — a download, a file
+   * manager, a message. Android has already copied it into the app's cache;
+   * this fetches it across the bridge.
+   *
+   * Pulled rather than pushed, a piece at a time. A thirty megabyte model
+   * cannot cross as one string, and the page is the side that knows when it
+   * can take the next piece and can keep the progress bar moving while it
+   * does. What comes out is an ordinary File, so everything downstream — the
+   * G-code branch, the arranging, the fit to plate — is the same code that
+   * runs when somebody picks a file by hand.
+   */
+  async function pullIncoming() {
+    var a = window.AndroidSlicer;
+    if (!a || typeof a.incomingName !== 'function') return;
+    var name = '';
+    try { name = a.incomingName(); } catch (err) { return; }
+    if (!name) return;
+
+    var total = parseInt(a.incomingSize(), 10) || 0;
+    if (!total) { try { a.incomingDone(); } catch (e) {} return; }
+
+    var CHUNK = 256 * 1024;
+    var parts = [], got = 0;
+    showProgress('Opening ' + name, 0);
+    try {
+      while (got < total) {
+        var b64 = a.incomingChunk(String(got), String(CHUNK));
+        if (!b64) throw new Error('the file stopped arriving after ' + got + ' of ' + total + ' bytes');
+        var raw = atob(b64);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        parts.push(bytes);
+        got += bytes.length;
+        showProgress('Opening ' + name, Math.min(1, got / total));
+        // Let the page breathe between pieces, so the bar moves and a big
+        // model does not look like a hung app.
+        await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      if (got !== total) throw new Error('only ' + got + ' of ' + total + ' bytes arrived');
+      var file = new File(parts, name, { type: 'application/octet-stream' });
+      try { a.incomingDone(); } catch (e) {}
+      hideProgress();
+      await loadFiles([file]);
+    } catch (err) {
+      hideProgress();
+      try { a.incomingDone(); } catch (e) {}
+      alert('Could not open ' + name + '\n\n' + (err.message || err));
+    }
+  }
+
+  // Android calls this when a second file is opened while the app is running.
+  window.OrcaAndroidOpen = pullIncoming;
+
   /** Android back button: close the settings sheet before leaving the app. */
   window.OrcaAndroidBack = function () {
     if (el('panel') && el('panel').classList.contains('open')) { closePanel(); return true; }
@@ -3227,6 +3281,10 @@
     else narrowQuery.addListener(placePresets);
     refreshEmpty();
     renderPanel();
+
+    // If the app was opened by tapping a model somewhere else, it is waiting
+    // in the cache. Fetch it once everything else is up.
+    pullIncoming();
 
     document.addEventListener('keydown', function (ev) {
       if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;

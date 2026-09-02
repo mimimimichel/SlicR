@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Web Slicer</string>
+    <string name="open_with">Slice with ODPS Studio</string>
     <string name="pick_model">Choose a model (STL, 3MF, OBJ)</string>
     <string name="save_gcode">Save G-code</string>
     <string name="saved_to">G-code saved</string>
     <string name="save_failed">Could not save the G-code</string>
     <string name="no_file_app">No app on this device can pick files</string>
+    <string name="open_failed">That file could not be read</string>
 </resources>

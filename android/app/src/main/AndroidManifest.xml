@@ -36,6 +36,53 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              Opening a model from somewhere else. A tablet next to a printer
+              gets its models from a download, a USB stick or a chat message,
+              and "open with" is how a person expects that to work.
+
+              Android matches these by MIME type where the file manager knows
+              one, and by extension where it does not — which for STL, OBJ and
+              3MF is most of the time, so both are declared. The path pattern
+              has to be repeated per scheme and per case: the matcher is
+              literal, and a file called PART.STL is a different pattern from
+              part.stl.
+            -->
+            <intent-filter android:label="@string/open_with">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="model/stl" />
+                <data android:mimeType="model/obj" />
+                <data android:mimeType="model/3mf" />
+                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="application/sla" />
+            </intent-filter>
+            <intent-filter android:label="@string/open_with">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.stl" />
+                <data android:pathPattern=".*\\.STL" />
+                <data android:pathPattern=".*\\.obj" />
+                <data android:pathPattern=".*\\.OBJ" />
+                <data android:pathPattern=".*\\.3mf" />
+                <data android:pathPattern=".*\\.3MF" />
+                <data android:pathPattern=".*\\.gcode" />
+                <data android:pathPattern=".*\\.GCODE" />
+            </intent-filter>
+            <intent-filter android:label="@string/open_with">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="model/*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

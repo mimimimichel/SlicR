@@ -32,6 +32,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -77,6 +78,16 @@ public class MainActivity extends Activity {
     private File pendingGcodeFile;
     private String pendingGcodeName;
     private FileOutputStream gcodeStream;
+
+    /**
+     * A model handed to the app from somewhere else — a download, a file
+     * manager, a chat. It is copied into the cache on arrival and the page
+     * pulls it across in pieces when it is ready, the same way it pushes a
+     * finished G-code out: a thirty megabyte model cannot cross this bridge in
+     * one string, and the page is the side that knows when it can take it.
+     */
+    private File incomingFile;
+    private String incomingName;
     /** Bytes actually written for the file being streamed, so the page can check. */
     private long pendingGcodeBytes;
 
@@ -178,6 +189,78 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(APP_URL);
         }
+
+        takeIncoming(getIntent());
+    }
+
+    /**
+     * The app is already running and something else has handed it a file. The
+     * activity is singleTask, so this is where a second "open with" arrives.
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (takeIncoming(intent)) tellPageAboutIncoming();
+    }
+
+    /** Copy whatever was opened into the cache. Returns true if there was one. */
+    private boolean takeIncoming(@Nullable Intent intent) {
+        if (intent == null) return false;
+        Uri uri = null;
+        String action = intent.getAction();
+        if (Intent.ACTION_VIEW.equals(action)) {
+            uri = intent.getData();
+        } else if (Intent.ACTION_SEND.equals(action)) {
+            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (uri == null) return false;
+
+        String name = displayName(uri);
+        try {
+            File dir = new File(getCacheDir(), "incoming");
+            if (!dir.exists() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+            File out = new File(dir, "model.bin");
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 FileOutputStream to = new FileOutputStream(out)) {
+                if (in == null) throw new IOException("nothing to read at " + uri);
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) to.write(buf, 0, n);
+            }
+            incomingFile = out;
+            incomingName = name;
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "could not take the file that was opened", e);
+            incomingFile = null;
+            incomingName = null;
+            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                    R.string.open_failed, Toast.LENGTH_LONG).show());
+            return false;
+        }
+    }
+
+    /** The name the file had where it came from, which is what the user knows it by. */
+    private String displayName(Uri uri) {
+        String name = null;
+        if ("content".equals(uri.getScheme())) {
+            try (android.database.Cursor c = getContentResolver()
+                    .query(uri, null, null, null, null)) {
+                if (c != null && c.moveToFirst()) {
+                    int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                    if (i >= 0) name = c.getString(i);
+                }
+            } catch (Exception ignored) { }
+        }
+        if (name == null) name = uri.getLastPathSegment();
+        return name == null ? "model.stl" : name;
+    }
+
+    /** Nudge a page that is already up to come and fetch it. */
+    private void tellPageAboutIncoming() {
+        runOnUiThread(() -> webView.evaluateJavascript(
+                "(function(){if(window.OrcaAndroidOpen)window.OrcaAndroidOpen();})()", null));
     }
 
     @Override
@@ -339,6 +422,64 @@ public class MainActivity extends Activity {
                     toast(getString(R.string.save_failed));
                 }
             });
+        }
+
+        /**
+         * The name of the file the app was opened with, or an empty string.
+         * The page asks once at startup and again whenever it is told to.
+         */
+        @JavascriptInterface
+        public String incomingName() {
+            return incomingFile != null && incomingFile.exists() && incomingName != null
+                    ? incomingName : "";
+        }
+
+        /** How many bytes it holds, as a string, because the bridge is loose with numbers. */
+        @JavascriptInterface
+        public String incomingSize() {
+            return String.valueOf(incomingFile != null && incomingFile.exists()
+                    ? incomingFile.length() : 0);
+        }
+
+        /**
+         * One piece of it, base64. The page decides how big a bite it can take
+         * and when — which is the whole point of pulling rather than pushing.
+         */
+        @JavascriptInterface
+        public String incomingChunk(String offsetText, String lengthText) {
+            if (incomingFile == null || !incomingFile.exists()) return "";
+            long offset;
+            int length;
+            try {
+                offset = Long.parseLong(offsetText);
+                length = Integer.parseInt(lengthText);
+            } catch (NumberFormatException e) {
+                return "";
+            }
+            if (offset < 0 || length <= 0 || length > 4 * 1024 * 1024) return "";
+            try (RandomAccessFile raf = new RandomAccessFile(incomingFile, "r")) {
+                long left = raf.length() - offset;
+                if (left <= 0) return "";
+                int want = (int) Math.min(length, left);
+                byte[] buf = new byte[want];
+                raf.seek(offset);
+                raf.readFully(buf);
+                return Base64.encodeToString(buf, Base64.NO_WRAP);
+            } catch (IOException e) {
+                Log.e(TAG, "incomingChunk failed", e);
+                return "";
+            }
+        }
+
+        /** The page has it. Let go of the copy. */
+        @JavascriptInterface
+        public void incomingDone() {
+            if (incomingFile != null) {
+                //noinspection ResultOfMethodCallIgnored
+                incomingFile.delete();
+            }
+            incomingFile = null;
+            incomingName = null;
         }
 
         @JavascriptInterface
