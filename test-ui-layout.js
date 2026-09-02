@@ -229,6 +229,35 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
     ok('with the tools that need a model greyed out again', await disabled('#tool-move'));
   }
 
+  // --- and when the browser will not help -----------------------------------
+  // Some WebViews refuse to serve a worker script at all. The app is supposed
+  // to notice and slice in the page instead, and the person is not supposed to
+  // be able to tell — so this is the same slice with Worker taken away before
+  // the app ever loads.
+  const shut = await browser.newPage({ viewport: { width: 1400, height: 950 } });
+  const shutErrors = [];
+  shut.on('pageerror', e => shutErrors.push(e.message));
+  await shut.addInitScript(() => {
+    window.Worker = function () { throw new Error('Workers are not available here'); };
+  });
+  await shut.goto(APP);
+  await shut.waitForSelector('#btn-slice');
+  await shut.click('[data-demo="cube"]');
+  await shut.waitForFunction(() => !document.getElementById('btn-slice').disabled);
+  await shut.click('#btn-slice');
+  const inPage = await shut.waitForFunction(
+    () => !document.getElementById('btn-export').disabled, { timeout: 300000 }
+  ).then(() => true).catch(() => false);
+  ok('a browser with no workers slices in the page instead', inPage);
+  const stats = await shut.evaluate(() => {
+    const el = document.getElementById('stats') || document.querySelector('.sl-stats');
+    return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+  });
+  ok('and reports the same kind of answer (' + stats.slice(0, 40) + ')',
+    /Layers/.test(stats) && /Filament/.test(stats), stats.slice(0, 60));
+  ok('with nothing broken on the way', shutErrors.length === 0, shutErrors.slice(0, 2).join(' | '));
+  await shut.close();
+
   ok('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '));
   await browser.close();
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
