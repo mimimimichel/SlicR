@@ -7,8 +7,11 @@ is uploaded — the mesh never leaves the machine it was opened on.
 It is built for a tablet as much as a desktop: pointer-driven orbit and pinch,
 touch-sized controls, and a panel that folds away.
 
-There is also an Android wrapper in `android/` — a WebView with no permissions
-at all, serving the same files offline.
+There is also an Android wrapper in `android/` — a WebView serving the same
+files from inside the APK. One permission, `INTERNET`, used only by the app
+itself to hand a finished file to a printer on the local network; the page
+cannot reach the network at all. It opens models sent to it from other apps,
+too.
 
 ## Running it
 
