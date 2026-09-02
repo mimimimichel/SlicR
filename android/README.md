@@ -1,7 +1,7 @@
 # Web Slicer — Android app
 
 A native WebView shell around the slicer that lives at the repository root. The
-web app is the single source of truth: `app/build.gradle` copies `index.html`
+web app is the single source of truth: `app/build.gradle` copies `slicer.html`
 and the assets it needs into `assets/www/` at build time, so the app and the
 website can never drift apart.
 

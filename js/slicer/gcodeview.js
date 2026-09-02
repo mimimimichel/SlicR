@@ -71,6 +71,13 @@
     var segments = 0, truncated = false;
     var extrudedMm = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     var maxZ = 0;
+    // The part on its own, which is not the same as the file. A start script
+    // draws a priming line down the front edge of the plate, and reporting
+    // that as "what this print covers" tells somebody nothing about their part
+    // and makes a perfectly good file look as if it runs off the bed. Only
+    // moves inside a named feature count towards it — a start script has none.
+    var named = false;
+    var pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
     // Where a layer starts. A file that says so is believed — which is the only
     // way a vase spiral comes out as layers rather than as one turn each. A
     // file that says nothing gets its layers from the Z it prints at.
@@ -113,6 +120,12 @@
       if (ny < minY) minY = ny;
       if (ny > maxY) maxY = ny;
       if (nz > maxZ) maxZ = nz;
+      if (named) {
+        if (nx < pMinX) pMinX = nx;
+        if (nx > pMaxX) pMaxX = nx;
+        if (ny < pMinY) pMinY = ny;
+        if (ny > pMaxY) pMaxY = ny;
+      }
     }
 
     var lines = text.split('\n');
@@ -125,6 +138,7 @@
         if (t) {
           var code = TYPE_CODES[t[1].toLowerCase()];
           type = code == null ? DEFAULT_TYPE : code;
+          named = true;
           run = null;               // a new type starts a new run, and a new colour
         } else if (/^;\s*(LAYER_CHANGE|LAYER\s*:|CHANGE_LAYER)/i.test(raw)) {
           sawLayerComment = true;
@@ -225,7 +239,13 @@
         layers: layers.length,
         filamentMm: extrudedMm,
         maxZ: maxZ,
-        bounds: segments ? { minX: minX, minY: minY, maxX: maxX, maxY: maxY } : null
+        bounds: segments ? { minX: minX, minY: minY, maxX: maxX, maxY: maxY } : null,
+        // The part alone, when the file names its features. A file that names
+        // none — a hand-written one, or another slicer's — has nothing to
+        // separate, and this is the same as the bounds above.
+        partBounds: pMaxX > pMinX
+          ? { minX: pMinX, minY: pMinY, maxX: pMaxX, maxY: pMaxY }
+          : (segments ? { minX: minX, minY: minY, maxX: maxX, maxY: maxY } : null)
       },
       truncated: truncated
     };

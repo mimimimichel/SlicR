@@ -1875,14 +1875,22 @@
     }
 
     var b = read.bounds;
+    var p = read.partBounds || b;
+    function box2(x) {
+      return Math.round(x.minX) + '–' + Math.round(x.maxX) + ' × ' +
+             Math.round(x.minY) + '–' + Math.round(x.maxY) + ' mm';
+    }
     var rows = [
       [read.layers.toLocaleString(), 'layers'],
       [read.segments.toLocaleString(), 'extrusion moves'],
       [Math.round(read.filamentMm) + ' mm', 'filament, priming included'],
       [read.maxZ.toFixed(2) + ' mm', 'tallest point'],
-      [Math.round(b.minX) + '–' + Math.round(b.maxX) + ' × ' +
-        Math.round(b.minY) + '–' + Math.round(b.maxY) + ' mm', 'across the plate']
+      [box2(p), 'the part, across the plate']
     ];
+    // The whole file usually reaches further than the part, because a start
+    // script draws a priming line down the edge of the plate. Worth saying
+    // when it differs, and only then.
+    if (box2(p) !== box2(b)) rows.push([box2(b), 'everything in the file, priming included']);
     var list = document.createElement('div');
     list.className = 'sl-readback-rows';
     rows.forEach(function (r) {

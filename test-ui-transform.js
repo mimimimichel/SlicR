@@ -113,12 +113,19 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   await page.waitForTimeout(300);
 
   console.log('=== 1. what is loaded is what is printed ===');
+  // The panel reports the part's own footprint first, and the whole file
+  // second when the two differ — which they do whenever a start script primes.
+
   ok('the panel measures the demo cube at 20 mm (' + await panelSize() + ')',
     /^20(\.0)?×20/.test(await panelSize()), await panelSize());
   const plain = await readBack();
   console.log('  read back: ' + plain.text);
   ok('and the file stands 20 mm tall (' + plain.z + ')', Math.abs(plain.z - 20) <= 0.3,
     String(plain.z));
+  ok('the footprint reported is the part’s, not the priming line’s (' +
+     plain.maxX + ' mm)', plain.maxX > 100 && plain.maxX < 160, String(plain.maxX));
+  ok('and the file’s own reach is given separately',
+    /priming included/.test(plain.text), plain.text.slice(0, 80));
 
   console.log('\n=== 2. scaling reaches the file ===');
   await openTab('object');
@@ -143,9 +150,12 @@ const APP = process.env.APP || 'http://localhost:8099/index.html';
   await openTab('object');
   await setField('Position', 'X', 210);
   const moved = await readBack();
-  ok('a part moved to the right pushes the file’s right edge with it (' +
+  // The figure read back is the part's own footprint, not the file's: a start
+  // script draws a priming line down the edge of the plate, and that does not
+  // move when the model does.
+  ok('a part moved to the right takes its right edge with it (' +
      home.maxX + ' → ' + moved.maxX + ')',
-    moved.maxX > home.maxX + 40, home.maxX + ' → ' + moved.maxX);
+    moved.maxX > home.maxX + 60, home.maxX + ' → ' + moved.maxX);
   ok('and is the same size where it lands (' + await panelSize() + ')',
     /^20(\.0)?×20/.test(await panelSize()), await panelSize());
 
