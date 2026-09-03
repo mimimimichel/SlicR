@@ -1,0 +1,216 @@
+/**
+ * Prismatic — the app, driven the way a person drives it.
+ *
+ * The conversion itself is measured in test-prismatic.js against shapes whose
+ * volume is known. What this asks is whether any of that reaches the screen:
+ * that the panel counts what is open, that Convert replaces it with the
+ * rebuild and says what it did, that going back really goes back — and that
+ * the file which comes out of the browser at the end is a sound STL of the
+ * same solid, which is the only thing the whole app is for.
+ *
+ *   python3 -m http.server 8099   (from the repo root)
+ *   node test-ui-prismatic.js
+ */
+const { chromium } = require('playwright');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const L = require('./js/slicer/loaders.js');
+const P = require('./prismatic/prismatic.js');
+const APP = process.env.APP || 'http://localhost:8099/prismatic/index.html';
+
+/** An ASCII STL of a 20 x 30 x 10 box, cut into 768 facets. */
+function boxSTL() {
+  const w = 20, d = 30, h = 10;
+  const c = [[0, 0, 0], [w, 0, 0], [w, d, 0], [0, d, 0],
+             [0, 0, h], [w, 0, h], [w, d, h], [0, d, h]];
+  const quads = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+  let tris = [];
+  for (const q of quads) tris.push([c[q[0]], c[q[1]], c[q[2]]], [c[q[0]], c[q[2]], c[q[3]]]);
+  const mid = (a, b) => a.map((v, i) => (v + b[i]) / 2);
+  for (let pass = 0; pass < 3; pass++) {
+    const next = [];
+    for (const [a, b, x] of tris) {
+      const ab = mid(a, b), bx = mid(b, x), xa = mid(x, a);
+      next.push([a, ab, xa], [ab, b, bx], [xa, bx, x], [ab, bx, xa]);
+    }
+    tris = next;
+  }
+  const out = ['solid box'];
+  for (const t of tris) {
+    out.push('facet normal 0 0 0', 'outer loop');
+    for (const v of t) out.push('vertex ' + v.map(n => n.toFixed(5)).join(' '));
+    out.push('endloop', 'endfacet');
+  }
+  out.push('endsolid box');
+  return out.join('\n');
+}
+
+/** And a sphere, which is the mesh it should refuse to flatter. */
+function sphereSTL(seg = 24, r = 10) {
+  const at = (i, j) => {
+    const phi = Math.PI * j / seg, theta = 2 * Math.PI * i / seg;
+    return [r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi)];
+  };
+  const out = ['solid ball'];
+  const face = (a, b, c) => {
+    out.push('facet normal 0 0 0', 'outer loop');
+    for (const v of [a, b, c]) out.push('vertex ' + v.map(n => n.toFixed(5)).join(' '));
+    out.push('endloop', 'endfacet');
+  };
+  for (let j = 0; j < seg; j++) {
+    for (let i = 0; i < seg; i++) {
+      const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+      if (j > 0) face(a, d, b);
+      if (j < seg - 1) face(b, d, c);
+    }
+  }
+  out.push('endsolid ball');
+  return out.join('\n');
+}
+
+(async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
+  });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const errors = [];
+  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+
+  let pass = 0, fail = 0;
+  const ok = (label, cond, detail) => {
+    if (cond) { pass++; console.log('  ok    ' + label); }
+    else { fail++; console.log('  FAIL  ' + label + (detail !== undefined ? '  -> ' + detail : '')); }
+  };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prismatic-'));
+  const boxPath = path.join(dir, 'rough-box.stl');
+  const ballPath = path.join(dir, 'ball.stl');
+  fs.writeFileSync(boxPath, boxSTL());
+  fs.writeFileSync(ballPath, sphereSTL());
+
+  /** Everything the panel is saying, as { label: value }. */
+  const readList = id => page.evaluate(which => {
+    const out = {};
+    const list = document.getElementById(which);
+    const kids = Array.from(list.children);
+    for (let i = 0; i < kids.length - 1; i += 2) out[kids[i].textContent.trim()] = kids[i + 1].textContent.trim();
+    return out;
+  }, id);
+  const verdict = () => page.locator('#verdict').textContent();
+  const settled = () => page.waitForFunction(() =>
+    document.getElementById('toast').hidden && !document.getElementById('btn-export').disabled,
+    { timeout: 60000 });
+
+  await page.goto(APP);
+  await page.waitForSelector('#btn-open');
+
+  console.log('=== 1. an empty page asks for a mesh ===');
+  ok('the drop target is up', !(await page.locator('#empty').isHidden()));
+  ok('and nothing can be converted or saved yet',
+    await page.locator('#btn-convert').isDisabled() && await page.locator('#btn-export').isDisabled());
+
+  console.log('\n=== 2. it counts what is open ===');
+  await page.setInputFiles('#file-input', boxPath);
+  await settled();
+  const opened = await readList('facts');
+  console.log('  ' + JSON.stringify(opened));
+  ok('768 facets', opened.Triangles === '768', opened.Triangles);
+  ok('over six flat faces', opened['Flat faces'] === '6', opened['Flat faces']);
+  ok('watertight', opened.Watertight === 'yes', opened.Watertight);
+  ok('the drop target is out of the way', await page.locator('#empty').isHidden());
+  ok('and the file is named', (await page.locator('#file-name').textContent()).trim() === 'rough-box.stl');
+  ok('a prismatic part is called one', /prismatic part/.test(await verdict()), await verdict());
+
+  console.log('\n=== 3. converting says what it did, and does it ===');
+  await page.click('#btn-convert');
+  await settled();
+  const report = await readList('report');
+  console.log('  ' + JSON.stringify(report));
+  ok('768 triangles down to 12', report.Triangles === '768 → 12', report.Triangles);
+  ok('98% fewer', /9[0-9]% fewer/.test(report[''] || ''), report['']);
+  ok('six faces, every one rebuilt from its outline',
+    report.Faces === '6' && report['Rebuilt from outlines'] === '6 of 6', report['Rebuilt from outlines']);
+  ok('the volume is held', report['Volume held to'] === '0.000%', report['Volume held to']);
+  ok('and it is still watertight', report.Watertight === 'yes', report.Watertight);
+  const now = await readList('facts');
+  ok('the panel is describing the rebuild now',
+    (await page.locator('#facts-head').textContent()).trim() === 'The rebuilt solid' && now.Triangles === '12',
+    now.Triangles);
+  ok('and there is nothing left to convert', await page.locator('#btn-convert').isDisabled());
+
+  console.log('\n=== 4. the file that comes out is the solid ===');
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#btn-export')
+  ]);
+  const saved = path.join(dir, download.suggestedFilename());
+  await download.saveAs(saved);
+  ok('it is offered under a name that says what it is',
+    download.suggestedFilename() === 'rough-box-solid.stl', download.suggestedFilename());
+  const bytes = fs.readFileSync(saved);
+  const back = L.parseSTL(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  ok('and reads back as 12 triangles', back.length / 9 === 12, back.length / 9);
+  ok('holding the volume of the box it came from',
+    Math.abs(P.volumeOf(back) - 6000) < 0.01, P.volumeOf(back));
+  ok('watertight on disk, not just on screen', P.watertight(back, 1e-4));
+
+  console.log('\n=== 5. going back goes back ===');
+  await page.click('#btn-reset');
+  await settled();
+  const again = await readList('facts');
+  ok('768 facets once more', again.Triangles === '768', again.Triangles);
+  ok('the rebuild is put away', await page.locator('#report-block').isHidden());
+  ok('and Convert is offered again', !(await page.locator('#btn-convert').isDisabled()));
+
+  console.log('\n=== 6. a tolerance nobody should use is refused, not obeyed ===');
+  // A box is a box at any tolerance, so the mesh that shows this is the one
+  // that has something to lose: at four millimetres of slack a sphere would
+  // come back seven per cent smaller than it went in.
+  await page.setInputFiles('#file-input', ballPath);
+  await settled();
+  await page.fill('#opt-deviation', '4');
+  await page.fill('#opt-angle', '30');
+  await page.locator('#opt-angle').blur();
+  await settled();
+  const roundTriangles = (await readList('facts')).Triangles;
+  await page.click('#btn-convert');
+  await page.waitForFunction(() => /Left alone|Rebuilt/.test(document.getElementById('toast').textContent),
+    { timeout: 60000 });
+  const complaint = (await page.locator('#toast').textContent()).trim();
+  console.log('  ' + complaint);
+  ok('it says it left the mesh alone, and why', /^Left alone.*off the volume/.test(complaint), complaint);
+  const untouched = await readList('facts');
+  ok('and the mesh on screen is the one that went in',
+    untouched.Triangles === roundTriangles && await page.locator('#report-block').isHidden(),
+    untouched.Triangles + ' of ' + roundTriangles);
+
+  console.log('\n=== 7. a scan is called a scan ===');
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.setInputFiles('#file-input', ballPath);
+  await settled();
+  const scan = await verdict();
+  console.log('  ' + scan.trim().slice(0, 120) + '…');
+  ok('a sphere is not sold as a prismatic part', /never a prismatic part/.test(scan), scan);
+  ok('and it is still offered, not blocked', !(await page.locator('#btn-convert').isDisabled()));
+
+  console.log('\n=== 8. the sample part is there to try ===');
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.click('[data-demo]');
+  await settled();
+  const demo = await readList('facts');
+  ok('it loads with a bore through it and 36 faces',
+    demo['Flat faces'] === '36' && demo.Watertight === 'yes', JSON.stringify(demo));
+  await page.click('#btn-convert');
+  await settled();
+  const demoReport = await readList('report');
+  ok('and converts: ' + demoReport.Triangles, demoReport.Triangles === '2,176 → 136', demoReport.Triangles);
+
+  ok('nothing threw along the way', errors.length === 0, errors.slice(0, 3).join(' | '));
+  console.log('\n' + pass + ' passed, ' + fail + ' failed');
+  await browser.close();
+  process.exit(fail ? 1 : 0);
+})();

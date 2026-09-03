@@ -1,5 +1,5 @@
 /**
- * Web Slicer — rebuilding a solid out of a mesh.
+ * Prismatic — rebuilding a solid out of a mesh.
  *
  * The conversion is only worth having if it is exact where it claims to be and
  * timid everywhere else, so the shapes here are ones whose answer is known
@@ -11,7 +11,7 @@
  *   node test-prismatic.js
  */
 globalThis.earcut = require('./js/vendor/earcut.js');
-var P = require('./js/slicer/prismatic.js');
+var P = require('./prismatic/prismatic.js');
 
 var pass = 0, fail = 0;
 function ok(label, cond, detail) {

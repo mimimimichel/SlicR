@@ -39,19 +39,6 @@ take.
 thicken, lean together and reach the plate as a few trunks, using about half the
 material and touching the part only at the tips.
 
-**Mesh to solid.** An STL is a solid that was chopped into triangles, and the
-prismatic conversion puts it back together: the flat faces are found and each
-fitted to one exact plane, every vertex is moved onto the corner where its
-planes cross, and each face is rebuilt from its outline rather than kept as a
-fan of facets. It is the prismatic half of Fusion's Convert Mesh, and it is what
-makes a top surface land in one layer instead of two and a wall read as vertical
-rather than as a shallow overhang — usually in a tenth of the triangles. Every
-face is measured against the facets it replaces and the finished body against
-the volume and the seams of the one it came from, so what does not add up is
-handed back untouched rather than quietly reshaped. It also says what a mesh is
-before being asked to convert it, and says so plainly when the answer is a scan
-that should be left alone.
-
 **Painting.** Three brushes on the model itself: force support here, keep
 support away, put the seam on this face. Marks follow the model through every
 move, rotation and scale.
@@ -96,7 +83,9 @@ node test-multitool.js           # tool changes and the prime tower
 node test-template.js            # the custom G-code expression language
 node test-gcodecheck.js          # 35 injected faults the checker must catch
 node test-profiles.js            # all 43 profiles with every feature on
+
 node test-prismatic.js           # mesh to solid, on shapes whose volume is known
+node test-ui-prismatic.js        # and the app around it, down to the saved STL
 ```
 
 ### Measured against a reference
@@ -117,6 +106,40 @@ the true volume with a worst case of 2.5%; the reference averages 2.85% with a
 worst case of 10.4%. That comparison found most of the real defects in this
 engine — spacing confused with width, solid surfaces narrower than a line,
 infill left unconnected, walls thrown away at reflex corners.
+
+## Prismatic
+
+`prismatic/` is a second app in the same repo, with its own page and nothing to
+do with slicing. It turns a triangle mesh back into a solid the way Fusion's
+*Convert Mesh > Prismatic* does: an STL is a solid that was chopped up, so the
+flat faces are found and each fitted to one exact plane, every vertex is moved
+onto the corner where its planes cross, and each face is re-triangulated from
+its outline instead of keeping the fan of facets. In goes an STL, OBJ or 3MF;
+out comes an STL whose flat faces are flat to the last decimal, whose edges are
+straight, and which usually holds a fraction of the triangles it arrived with.
+
+```
+python3 -m http.server 8099
+```
+
+Then open <http://localhost:8099/prismatic/>.
+
+What the conversion found is drawn rather than only reported: every face gets
+its own colour and the edges between faces are drawn over the top, so a part
+whose faces were found properly reads as a handful of flat colours with the
+part's real edges between them, and one where they were not is a confetti of
+patches you can see at a glance. Tolerances can then be dialled in against the
+picture, and Convert only ever does what is already on the screen.
+
+It is deliberately timid about what it will do to a part. Each rebuilt face is
+measured against the facets it replaces, and the finished body against the
+volume and the seams of the one it came from; what does not add up comes back
+untouched with the reason. A mesh that was never prismatic — a scan, a sculpt —
+is named as one before you press anything.
+
+There is no B-rep kernel in a web page, so what comes out is still a mesh.
+Anything genuinely curved is faceted to the deviation you set, which is what
+the warning is about, and which tightening the deviation avoids.
 
 ## Android
 
@@ -146,10 +169,13 @@ js/slicer/
   template.js         the custom G-code expression language
   presets.js          printers, filaments, quality profiles
   meshtools.js        split and cut
-  prismatic.js        mesh to solid, the flat faces found and refitted
   viewer.js           three.js scene, preview, painting
   app.js              UI
   worker.js           the slicing worker
 js/vendor/            clipper, earcut, three.js
+prismatic/            the mesh-to-solid app, on its own
+  prismatic.js        the faces found, fitted, and rebuilt
+  viewer.js           its viewport
+  app.js              its UI
 android/              the WebView wrapper
 ```

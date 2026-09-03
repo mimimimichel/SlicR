@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="color-scheme" content="dark"/>
+<title>Prismatic — mesh to solid</title>
+<meta name="description" content="Turn a triangle mesh back into a prismatic solid in the browser: the flat faces are found and fitted to one exact plane each, the corners are put back where their planes cross, and every face is rebuilt from its outline. Nothing is uploaded."/>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236366f1'/%3E%3Cpath d='M16 5l10 6v10l-10 6-10-6V11z' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round' opacity='.95'/%3E%3Cpath d='M16 5v22M6 11l10 6 10-6' fill='none' stroke='white' stroke-width='1.4' opacity='.5'/%3E%3C/svg%3E"/>
+<link rel="stylesheet" href="../styles/main.css"/>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<header class="pr-top">
+  <div class="pr-brand">
+    <span class="pr-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="26" height="26"><path d="M16 4l11 6.5v13L16 30 5 23.5v-13z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M5 10.5l11 6.5 11-6.5M16 17v13" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".55"/></svg>
+    </span>
+    <span class="pr-name">Prismatic<small>mesh → solid</small></span>
+  </div>
+  <div class="pr-actions">
+    <button class="pr-btn" id="btn-open" type="button">Open</button>
+    <button class="pr-btn primary" id="btn-convert" type="button" disabled>Convert</button>
+    <button class="pr-btn" id="btn-export" type="button" disabled>Save STL</button>
+  </div>
+</header>
+
+<main class="pr-main">
+  <section class="pr-stage">
+    <canvas id="view"></canvas>
+
+    <div class="pr-empty" id="empty">
+      <div class="pr-empty-card">
+        <h1>Drop a mesh here</h1>
+        <p>An STL, OBJ or 3MF of a part that came out of CAD. Its flat faces are
+           found, fitted to one exact plane each, and rebuilt from their outlines —
+           the prismatic conversion, the same idea as Convert Mesh in Fusion.</p>
+        <p class="pr-quiet">Nothing is uploaded. The mesh never leaves this machine.</p>
+        <div class="pr-empty-row">
+          <button class="pr-btn primary" id="btn-open-2" type="button">Choose a file</button>
+          <button class="pr-btn" data-demo="stepped" type="button">Try a sample part</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pr-views" id="views" hidden>
+      <button class="pr-view" data-view="iso" type="button">Iso</button>
+      <button class="pr-view" data-view="top" type="button">Top</button>
+      <button class="pr-view" data-view="front" type="button">Front</button>
+      <button class="pr-view" data-view="left" type="button">Left</button>
+    </div>
+
+    <div class="pr-toast" id="toast" hidden></div>
+  </section>
+
+  <aside class="pr-panel" id="panel">
+    <div class="pr-panel-scroll">
+
+      <section class="pr-block">
+        <h2 id="facts-head">The mesh</h2>
+        <div class="pr-file" id="file-name">Nothing open</div>
+        <dl class="pr-facts" id="facts"></dl>
+        <div class="pr-verdict" id="verdict"></div>
+      </section>
+
+      <section class="pr-block">
+        <h2>Tolerances</h2>
+        <div class="pr-field">
+          <label for="opt-angle">Face angle
+            <small>how far a facet may lean before it is a face of its own</small>
+          </label>
+          <span class="pr-num"><input id="opt-angle" type="number" inputmode="decimal" min="0.1" max="30" step="0.1" value="1.5"><i>°</i></span>
+        </div>
+        <div class="pr-field">
+          <label for="opt-deviation">Deviation
+            <small>how far a corner may sit off the face it is put in</small>
+          </label>
+          <span class="pr-num"><input id="opt-deviation" type="number" inputmode="decimal" min="0.001" max="2" step="0.01" value="0.05"><i>mm</i></span>
+        </div>
+        <div class="pr-field">
+          <label for="opt-square">Square up to X/Y/Z
+            <small>a face nearly on an axis is put exactly on it, so long as that stays inside the deviation</small>
+          </label>
+          <span class="pr-switch"><input id="opt-square" type="checkbox" checked><i></i></span>
+        </div>
+      </section>
+
+      <section class="pr-block" id="report-block" hidden>
+        <h2>The rebuild</h2>
+        <dl class="pr-facts" id="report"></dl>
+        <div class="pr-row">
+          <button class="pr-btn" id="btn-reset" type="button">Back to the mesh</button>
+        </div>
+      </section>
+
+      <section class="pr-block">
+        <h2>View</h2>
+        <div class="pr-field">
+          <label for="opt-shade">Colour by face</label>
+          <span class="pr-switch"><input id="opt-shade" type="checkbox" checked><i></i></span>
+        </div>
+        <div class="pr-field">
+          <label for="opt-edges">Draw the edges</label>
+          <span class="pr-switch"><input id="opt-edges" type="checkbox" checked><i></i></span>
+        </div>
+      </section>
+
+      <p class="pr-note">
+        What comes out is a triangle mesh, not a B-rep — there is no CAD kernel
+        in a web page. What it is instead is a mesh whose flat faces are flat to
+        the last decimal, whose edges are straight, and which usually holds a
+        fraction of the triangles it started with. Anything curved is faceted to
+        the deviation above, so a scan or a sculpt is better left alone.
+      </p>
+
+    </div>
+  </aside>
+</main>
+
+<input type="file" id="file-input" accept=".stl,.obj,.3mf,model/stl,model/3mf" hidden/>
+
+<script src="../js/vendor/three.min.js"></script>
+<script src="../js/vendor/earcut.js"></script>
+<script src="../js/slicer/loaders.js"></script>
+<script src="prismatic.js"></script>
+<script src="viewer.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

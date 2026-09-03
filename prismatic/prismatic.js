@@ -1,5 +1,5 @@
 /**
- * Orca Web Slicer — a prismatic solid, rebuilt from a mesh.
+ * Prismatic — a solid, rebuilt from a mesh.
  *
  * A mesh that came out of CAD is a solid that was chopped up: every flat face
  * arrives as a fan of facets, and every corner is only as sharp as the
@@ -27,6 +27,10 @@
  * earcut triangulates the faces. Without it the faces keep their facets and
  * only the plane fitting and vertex snapping happen, which is still worth
  * having; `rebuilt` in the report says which of the two ran.
+ *
+ * Three ways in: `analyze` for what a mesh is, `inspect` for that plus the
+ * face each facet was put in and the edges where faces meet — everything a
+ * viewer needs to draw what was found — and `toSolid` to do it.
  */
 (function (root) {
   'use strict';
@@ -137,7 +141,7 @@
   function buildAdjacency(mesh) {
     var count = mesh.count, V = mesh.vertices;
     var edge = new Map();
-    var pairA = [], pairB = [], pairLen = [];
+    var pairA = [], pairB = [], pairLen = [], pairV0 = [], pairV1 = [];
     var nonManifold = 0;
 
     for (var t = 0; t < count; t++) {
@@ -148,6 +152,7 @@
         if (seen === undefined) edge.set(key, t);
         else if (seen >= 0) {
           pairA.push(seen); pairB.push(t);
+          pairV0.push(a); pairV1.push(b);
           var ex = mesh.vx[b] - mesh.vx[a], ey = mesh.vy[b] - mesh.vy[a], ez = mesh.vz[b] - mesh.vz[a];
           pairLen.push(Math.sqrt(ex * ex + ey * ey + ez * ez));
           edge.set(key, -1);
@@ -170,9 +175,19 @@
     mesh.pairA = pairA;
     mesh.pairB = pairB;
     mesh.pairLen = pairLen;
+    mesh.pairV0 = pairV0;
+    mesh.pairV1 = pairV1;
     mesh.nonManifold = nonManifold;
+    // What is left in the map once every pair has been taken out is an edge
+    // with only one facet on it: the mesh has a hole there, or ends.
     mesh.openEdges = 0;
-    edge.forEach(function (value) { if (value >= 0) mesh.openEdges++; });
+    mesh.open = [];
+    edge.forEach(function (value, key) {
+      if (value < 0) return;
+      mesh.openEdges++;
+      var lo = Math.floor(key / V);
+      mesh.open.push(lo, key - lo * V);
+    });
     return mesh;
   }
 
@@ -1145,6 +1160,69 @@
   }
 
   /**
+   * Everything `analyze` says, and with it the mesh as it was read, which face
+   * each facet was put in, and the edges where one face meets another. That is
+   * what a viewer needs to draw the answer rather than only report it: paint
+   * the facets by face and the shape of what was found is on the screen.
+   *
+   * The geometry comes back rather than being assumed, because the mesh that
+   * was read is not quite the one that was handed in — coincident vertices are
+   * one vertex here, and facets with no area at all are gone.
+   */
+  function inspect(positions, options) {
+    var o = settings(options);
+    var mesh = buildMesh(positions, o);
+    if (!mesh.count) {
+      return {
+        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0,
+        verdict: 'empty', watertight: false, openEdges: 0,
+        positions: new Float32Array(0), face: new Int32Array(0), edges: new Float32Array(0)
+      };
+    }
+    var seg = segment(mesh, o);
+    var stats = faceStats(mesh, seg);
+
+    var out = new Float32Array(mesh.count * 9);
+    for (var t = 0; t < mesh.count; t++) {
+      for (var k = 0; k < 3; k++) {
+        var id = mesh.ids[t * 3 + k];
+        out[t * 9 + k * 3] = mesh.vx[id];
+        out[t * 9 + k * 3 + 1] = mesh.vy[id];
+        out[t * 9 + k * 3 + 2] = mesh.vz[id];
+      }
+    }
+
+    var lines = [];
+    for (var e = 0; e < mesh.pairA.length; e++) {
+      if (seg.face[mesh.pairA[e]] === seg.face[mesh.pairB[e]]) continue;
+      pushPoint(lines, mesh, mesh.pairV0[e]);
+      pushPoint(lines, mesh, mesh.pairV1[e]);
+    }
+    for (var b = 0; b < mesh.open.length; b += 2) {
+      pushPoint(lines, mesh, mesh.open[b]);
+      pushPoint(lines, mesh, mesh.open[b + 1]);
+    }
+
+    return {
+      triangles: mesh.count,
+      faces: stats.faces,
+      planarArea: stats.planarArea,
+      sharpness: stats.sharpness,
+      deviation: stats.deviation,
+      openEdges: mesh.openEdges,
+      watertight: mesh.openEdges === 0 && mesh.nonManifold === 0,
+      verdict: verdictOf(stats, mesh.count),
+      positions: out,
+      face: seg.face,
+      edges: new Float32Array(lines)
+    };
+  }
+
+  function pushPoint(into, mesh, id) {
+    into.push(mesh.vx[id], mesh.vy[id], mesh.vz[id]);
+  }
+
+  /**
    * The conversion. Returns the rebuilt soup along with everything needed to
    * decide whether to trust it — and `ok: false` with the original geometry
    * when the rebuild did not survive its own checks.
@@ -1232,12 +1310,13 @@
     return report;
   }
 
-  root.OrcaPrismatic = {
+  root.Prismatic = {
     DEFAULTS: DEFAULTS,
     analyze: analyze,
+    inspect: inspect,
     toSolid: toSolid,
     volumeOf: volumeOf,
     watertight: watertight
   };
-  if (typeof module !== 'undefined' && module.exports) module.exports = root.OrcaPrismatic;
+  if (typeof module !== 'undefined' && module.exports) module.exports = root.Prismatic;
 })(typeof globalThis !== 'undefined' ? globalThis : window);
