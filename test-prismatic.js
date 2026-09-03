@@ -11,7 +11,7 @@
  *   node test-prismatic.js
  */
 globalThis.earcut = require('./js/vendor/earcut.js');
-require('./prismatic/primitives.js');
+var Prim = require('./prismatic/primitives.js');
 var P = require('./prismatic/prismatic.js');
 var Solid = require('./prismatic/solid.js');
 
@@ -500,6 +500,50 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
       crumbs.length <= tight.faces.length * 0.05, crumbs.length + ' of ' + tight.faces.length);
     ok('nor is any measurable part of the surface in them (' +
       (100 * dust / whole).toFixed(4) + '%)', dust < whole * 0.001, dust + ' of ' + whole);
+  }
+
+  // Where two faces meet, the curve they meet along is the curve their surfaces
+  // cross in — an exact thing, not something to be recovered from the staircase
+  // of facet edges that approximates it. This is what a modeller does and what
+  // this did not: fitting a circle to the staircase only works when the
+  // staircase is tidy, and where a plane cuts a doughnut it is not, so the
+  // boundary came back as a hundred and forty separate little lines.
+  {
+    var ring = { type: 'torus', centre: [0, 0, 0], axis: [0, 0, 1], major: 12, minor: 3,
+      radius: 3, outward: true };
+    var lid = { type: 'plane', x: 0, y: 0, z: 1, d: 1.5 };
+    // At that height the tube is sqrt(9 - 2.25) wide, so the plane cuts the
+    // doughnut in two circles, one either side of the ring.
+    var reach = Math.sqrt(9 - 2.25);
+    var outer = Prim.crossing(lid, ring, [14.5, 0, 1.5], 0.05);
+    var inner = Prim.crossing(lid, ring, [9.5, 0, 1.5], 0.05);
+    ok('a plane through a doughnut crosses it in a circle, exactly (' +
+      (outer && outer.radius.toFixed(6)) + ')',
+      outer && outer.type === 'circle' && near(outer.radius, 12 + reach, 1e-9),
+      outer && outer.radius);
+    ok('and it finds the branch it was asked about (' + (inner && inner.radius.toFixed(6)) + ')',
+      inner && near(inner.radius, 12 - reach, 1e-9), inner && inner.radius);
+
+    var bore = { type: 'cylinder', axis: [0, 0, 1], point: [0, 0, 0], radius: 5, outward: true };
+    var square = Prim.crossing({ type: 'plane', x: 0, y: 0, z: 1, d: 7 }, bore, [5, 0, 7], 0.05);
+    ok('a plane square to a bore crosses it in the bore\'s own circle',
+      square && square.type === 'circle' && near(square.radius, 5, 1e-9), square && square.radius);
+    // Along the bore they cross in two straight lines, which is not a circle
+    // and not something to pretend about.
+    ok('a plane along a bore is left to the mesh',
+      Prim.crossing({ type: 'plane', x: 1, y: 0, z: 0, d: 0 }, bore, [0, 5, 0], 0.05) === null);
+    ok('and two planes cross in a line',
+      (Prim.crossing({ type: 'plane', x: 0, y: 0, z: 1, d: 3 },
+        { type: 'plane', x: 1, y: 0, z: 0, d: 2 }, [2, 0, 3], 0.05) || {}).type === 'line');
+
+    // End to end, on the doughnut nobody drew exactly. What matters is that a
+    // boundary is a few edges rather than one per facet.
+    var edged = Solid.build(P.toSolid(roughTorus(12, 3, 96, 48, 0.05), { deviation: 0.02 }).brep,
+      { tolerance: 0.2 });
+    ok('and a boundary comes back as a few edges, not one per facet (' +
+      (edged.edges.length / edged.faces.length).toFixed(1) + ' per face)',
+      edged.edges.length < edged.faces.length * 6,
+      edged.edges.length + ' edges over ' + edged.faces.length + ' faces');
   }
 
   // Working the drawing out used to be given up on past four hundred faces,

@@ -788,6 +788,118 @@
     return worst;
   }
 
+  // ---------------------------------------------------------------------------
+  // Where two surfaces cross
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The curve two surfaces meet along, worked out from the surfaces rather than
+   * traced off the mesh.
+   *
+   * This is the difference between a face that looks drawn and a face that
+   * looks decalqued. Every boundary here arrives as a ring of facet edges — a
+   * staircase — and fitting a line or a circle *to the staircase* only works
+   * when the staircase happens to be tidy. Where a plane cuts a doughnut the
+   * true answer is a circle, exactly, and the staircase around it wanders far
+   * enough that no circle fitted to it holds: so the boundary came back as a
+   * hundred and forty separate little edges, one per facet, which is nobody's
+   * idea of an edge.
+   *
+   * Only the cases a turned or machined part is actually made of are worked
+   * out, because those are the ones with an answer that is a line or a circle:
+   * two planes cross in a line, and any two surfaces of revolution about the
+   * same axis cross in circles about it — which covers a plane square to a
+   * bore, a shoulder on a shaft, a fillet running into a face, a ball seated in
+   * a socket. Everything else keeps the boundary the mesh gave.
+   *
+   * The point on the curve is not solved for algebraically, case by case; it is
+   * a point of the boundary pulled onto both surfaces at once, which is the
+   * same solve that seats every corner and needs no case analysis at all.
+   */
+  function turningAxisOf(s) {
+    if (s.type === 'cylinder') return { dir: s.axis, at: s.point };
+    if (s.type === 'cone') return { dir: s.axis, at: s.apex };
+    if (s.type === 'torus') return { dir: s.axis, at: s.centre };
+    return null;      // a plane and a ball turn about anything
+  }
+
+  /** How far a point is from a line. */
+  function offLine(line, p) {
+    var w = [p[0] - line.at[0], p[1] - line.at[1], p[2] - line.at[2]];
+    var along = dot(w, line.dir);
+    return Math.sqrt(Math.max(0, dot(w, w) - along * along));
+  }
+
+  function sharedAxis(a, b, tolerance) {
+    var la = turningAxisOf(a), lb = turningAxisOf(b);
+    if (la && lb) {
+      if (Math.abs(dot(la.dir, lb.dir)) < 0.9999) return null;
+      return offLine(la, lb.at) <= tolerance ? la : null;
+    }
+    if (la || lb) {
+      var line = la || lb;
+      var loose = la ? b : a;
+      if (loose.type === 'sphere') {
+        return offLine(line, loose.centre) <= tolerance ? line : null;
+      }
+      if (loose.type === 'plane') {
+        // Square to the axis, or the two do not meet in a circle at all.
+        return Math.abs(dot([loose.x, loose.y, loose.z], line.dir)) >= 0.9999 ? line : null;
+      }
+      return null;
+    }
+    // Neither turns about anything of its own, so the pair says what the axis is.
+    if (a.type === 'sphere' && b.type === 'sphere') {
+      var between = norm([b.centre[0] - a.centre[0], b.centre[1] - a.centre[1],
+        b.centre[2] - a.centre[2]]);
+      return between ? { dir: between, at: a.centre } : null;
+    }
+    if (a.type === 'sphere' && b.type === 'plane') return { dir: [b.x, b.y, b.z], at: a.centre };
+    if (a.type === 'plane' && b.type === 'sphere') return { dir: [a.x, a.y, a.z], at: b.centre };
+    return null;
+  }
+
+  function crossing(a, b, seed, tolerance) {
+    if (!a || !b || !seed) return null;
+    if (a.type === 'plane' && b.type === 'plane') {
+      var run = norm(cross([a.x, a.y, a.z], [b.x, b.y, b.z]));
+      if (!run) return null;                       // parallel: they never meet
+      return { type: 'line' };
+    }
+    var axis = sharedAxis(a, b, tolerance);
+    if (!axis) return null;
+    var on = pull([a, b], seed, 0);
+    if (!on) return null;
+    var w = [on[0] - axis.at[0], on[1] - axis.at[1], on[2] - axis.at[2]];
+    var along = dot(w, axis.dir);
+    var centre = [axis.at[0] + axis.dir[0] * along, axis.at[1] + axis.dir[1] * along,
+      axis.at[2] + axis.dir[2] * along];
+    var radius = Math.hypot(on[0] - centre[0], on[1] - centre[1], on[2] - centre[2]);
+    if (!(radius > 1e-9)) return null;
+    return { type: 'circle', centre: centre, axis: axis.dir.slice(), radius: radius };
+  }
+
+  /** Is this run of corners on that curve, all of it, to within the tolerance? */
+  function onCurve(curve, points, tolerance) {
+    if (curve.type === 'line') {
+      var a = points[0], b = points[points.length - 1];
+      var d = norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+      if (!d) return false;
+      for (var i = 1; i < points.length - 1; i++) {
+        if (offLine({ dir: d, at: a }, points[i]) > tolerance) return false;
+      }
+      return true;
+    }
+    for (var k = 0; k < points.length; k++) {
+      var w = [points[k][0] - curve.centre[0], points[k][1] - curve.centre[1],
+        points[k][2] - curve.centre[2]];
+      var along = dot(w, curve.axis);
+      var out = Math.sqrt(Math.max(0, dot(w, w) - along * along)) - curve.radius;
+      if (Math.sqrt(out * out + along * along) > tolerance) return false;
+    }
+    return true;
+  }
+
   function distance(s, p) {
     if (s.type === 'sphere') {
       var dx = p[0] - s.centre[0], dy = p[1] - s.centre[1], dz = p[2] - s.centre[2];
@@ -1062,6 +1174,8 @@
     alongside: alongside,
     distance: distance,
     offset: offset,
+    crossing: crossing,
+    onCurve: onCurve,
     pull: pull,
     deviation: deviation,
     eigen3: eigen3,

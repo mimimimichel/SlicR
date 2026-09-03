@@ -777,6 +777,29 @@
       var pts = ids.map(at);
       var geometry = null;
 
+      // What the two surfaces say first. A boundary is where two faces meet, so
+      // the curve it runs along is the curve their surfaces cross in — an exact
+      // thing, not something to be recovered from the staircase of facet edges
+      // that happens to approximate it. Where there is an answer in closed form
+      // it is better than any fit, and it is the difference between a shoulder
+      // coming back as one circle and coming back as a hundred and forty lines.
+      if (chain.faces && chain.faces.length === 2) {
+        var meet = P.crossing(faces[chain.faces[0]].surface, faces[chain.faces[1]].surface,
+          pts[pts.length >> 1], tolerance);
+        if (meet && P.onCurve(meet, pts, tolerance)) {
+          if (meet.type === 'line' && !chain.ring) geometry = { type: 'line' };
+          else if (meet.type === 'circle') {
+            geometry = {
+              type: 'circle', centre: meet.centre, radius: meet.radius,
+              axis: turning(pts, meet) < 0
+                ? [-meet.axis[0], -meet.axis[1], -meet.axis[2]] : meet.axis
+            };
+          }
+        }
+      }
+
+      if (geometry) { add(ids, geometry); return; }
+
       if (ids.length === 2) {
         geometry = { type: 'line' };
       } else if (!chain.ring && straight(pts, tolerance)) {
@@ -789,12 +812,34 @@
       }
 
       if (!geometry) {
-        // Neither straight nor round: it stays as the segments it arrived as.
-        for (var i = 0; i < ids.length - 1; i++) add([ids[i], ids[i + 1]], { type: 'line' });
+        // Neither straight nor round nor the crossing of anything with a name.
+        // It is still not one edge per facet: the run is cut into the fewest
+        // straight pieces that hold, which is a handful where it used to be a
+        // hundred.
+        var from = 0;
+        while (from < ids.length - 1) {
+          var to = from + 1;
+          while (to + 1 < ids.length && straight(pts.slice(from, to + 2), tolerance)) to++;
+          add(ids.slice(from, to + 1), { type: 'line' });
+          from = to;
+        }
         return;
       }
       add(ids, geometry);
     });
+
+    /** Which way this run goes round that circle. */
+    function turning(points, circle) {
+      var turn = 0;
+      for (var i = 0; i + 1 < points.length; i++) {
+        var p = [points[i][0] - circle.centre[0], points[i][1] - circle.centre[1],
+          points[i][2] - circle.centre[2]];
+        var q = [points[i + 1][0] - circle.centre[0], points[i + 1][1] - circle.centre[1],
+          points[i + 1][2] - circle.centre[2]];
+        turn += dot(cross(p, q), circle.axis);
+      }
+      return turn;
+    }
 
     function add(ids, geometry) {
       var index = edges.length;

@@ -238,6 +238,26 @@ bound, and here is the closed shell they make. Fusion opens that as a solid
 body — faces you can click, fillet, sketch on and cut — so the part is editable
 again rather than merely printable. STL comes out too, for printing.
 
+**Where two faces meet, the edge between them is where their surfaces cross** —
+worked out from the surfaces, not traced off the mesh. This is the difference
+between a face that looks drawn and a face that looks decalqued, and it took a
+while to see. Every boundary arrives as a staircase of facet edges, and fitting
+a line or a circle *to the staircase* only works when the staircase is tidy:
+where a plane cuts a doughnut the true answer is a circle, exactly, and the
+staircase around it wanders far enough that no circle fitted to it holds. So
+that boundary came back as a hundred and forty separate little lines. Asking the
+two surfaces instead gives the circle to the last decimal. On the reported part,
+**358 edges to 62**, nineteen of them circles.
+
+Only the crossings with an answer in closed form are taken: two planes cross in
+a line, and any two surfaces of revolution about the same axis cross in circles
+about it — a plane square to a bore, a shoulder on a shaft, a fillet running
+into a face, a ball seated in a socket. A plane *along* a bore crosses it in two
+straight lines rather than a circle, and is left alone rather than lied about.
+The point on the curve is not solved for case by case either; it is a point of
+the boundary pulled onto both surfaces at once, which is the same solve that
+seats every corner.
+
 Writing that file is not a second conversion: the faces, their surfaces and
 their loops all fall out of the rebuild and the recognition already. What takes the care is that the edges
 are *shared* — one edge between the two faces that meet along it, traversed the
@@ -293,15 +313,12 @@ round, cylinders walked over, each face triangulated in its own surface — and
 that mesh is weighed. For a 20 x 30 x 10 box it comes to 6000.000 mm3, and for
 the plate with the six millimetre bore, short by exactly the bore.
 
-What is not there is a CAD kernel, and where that shows is the *edges*. Every
-boundary here is the mesh's own: the ring of facet edges where one recognised
-region stops and the next begins, fitted to a straight line or a circle where it
-runs as one. What a modeller does instead is extend the two fitted surfaces and
-intersect them, so the edge between a cylinder and a plane is the exact ellipse
-they cross in and nothing else. That is the difference between a face that looks
-drawn and a face that looks traced, and it is why a boundary here can still come
-back as a few hundred short edges where it should be one long one — the faces
-are right, the lines between them are as good as the tessellation was.
+What is not there is a CAD kernel, and where it shows is in which crossings can
+be worked out. Only the ones with an answer that is a line or a circle are —
+which is every crossing a turned or machined part is made of, and not the rest.
+Two cylinders at an angle cross in a quartic; a plane cutting a doughnut
+obliquely likewise. Those boundaries keep the mesh's, cut into the fewest
+straight runs that hold rather than one edge per facet.
 
 Beyond that: Planes,
 cylinders, cones, spheres and tori are recognised — which covers a doughnut, a
