@@ -325,19 +325,20 @@ function sphereSTL(seg = 24, r = 10) {
   const loose = await gauge(80);
   console.log('  tight: ' + tight);
   console.log('  loose: ' + loose);
-  ok('it reads in millimetres and degrees, not in gauge units',
-    /mm · [\d.]+°/.test(tight), tight);
-  const mm = t => parseFloat(t);
-  // The two tolerances the gauge drives are not the same tolerance and do not
-  // move together. How far the rebuild may move the mesh stays modest whatever
-  // the gauge says — open that up and faces reach across features and the
-  // conversion refuses. How far a recognised cylinder may sit off the facets it
-  // stands in for is the lever, and it is the one that has to travel.
+  ok('it reads in millimetres, not in gauge units', /[\d.]+ mm/.test(tight), tight);
+  // The gauge has one lever, and it took a while to see that it should. How far
+  // a recognised cylinder may sit off the facets it stands in for is the whole
+  // of the simplification. How far the *rebuild* may move the mesh is a
+  // different question with a different answer, and moving both together means
+  // every notch of the slider changes the mesh the recognition is then run on —
+  // so the answer jumps about for reasons that have nothing to do with what was
+  // asked. Held still, the count falls as the gauge is pushed, every time.
   const shapes = t => parseFloat(/shapes to ([\d.]+) mm/.exec(t)[1]);
+  const held = t => parseFloat(/mesh held to ([\d.]+) mm/.exec(t)[1]);
   ok('pushing it lets a recognised shape sit further off (' + shapes(tight) + ' → ' + shapes(loose) + ' mm)',
     shapes(loose) > shapes(tight) * 10, shapes(tight) + ' → ' + shapes(loose));
-  ok('while the rebuild itself stays close to the mesh (' + mm(tight) + ' → ' + mm(loose) + ' mm)',
-    mm(loose) > mm(tight) && mm(loose) < mm(tight) * 10, mm(tight) + ' → ' + mm(loose));
+  ok('and the mesh underneath is held to the same thing throughout (' + held(tight) + ' mm)',
+    held(tight) === held(loose), held(tight) + ' → ' + held(loose));
   ok('and what it did is on the model, not just described: ' + loose,
     /cylinder/.test(loose) && !/cylinder/.test(tight), tight + ' | ' + loose);
   // What it means depends on the part: the same setting is a different number
@@ -345,8 +346,8 @@ function sphereSTL(seg = 24, r = 10) {
   await page.setInputFiles('#file-input', boxPath);
   await settled();
   const onBox = (await reading()).trim();
-  ok('and it means something different on a different part (' + mm(onBox) + ' mm)',
-    Math.abs(mm(onBox) - mm(loose)) > 1e-4, onBox);
+  ok('and it means something different on a different part (' + shapes(onBox) + ' mm)',
+    Math.abs(shapes(onBox) - shapes(loose)) > 1e-4, onBox);
   const byHand = await page.evaluate(() => {
     document.querySelector('.pr-exact').open = true;
     const d = document.getElementById('opt-deviation');
@@ -355,6 +356,29 @@ function sphereSTL(seg = 24, r = 10) {
     return document.getElementById('opt-simplify').value;
   });
   ok('typing a tolerance moves the gauge to match it', parseInt(byHand, 10) > 60, byHand);
+
+  console.log('\n=== 7c. it can find the setting for you ===');
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.setInputFiles('#file-input', boxPath);
+  await settled();
+  ok('the search is offered once there is a mesh', !(await page.locator('#btn-best').isDisabled()));
+  await page.click('#btn-best');
+  await page.waitForFunction(() =>
+    document.getElementById('toast').hidden && !document.getElementById('btn-step').disabled,
+    { timeout: 120000 });
+  const where = await page.locator('#opt-simplify').inputValue();
+  const advice = (await page.locator('#simplify-advice').textContent()).trim();
+  console.log('  box -> gauge ' + where + ': ' + advice);
+  // A box is six faces at every setting. The rule is the fewest faces, and
+  // among the settings that get them, the most faithful — so a part with
+  // nothing to simplify is left alone and told so, rather than pushed to the
+  // end of the slider to gain nothing and lose accuracy.
+  ok('a box is left at the faithful end', where === '0', where);
+  ok('and told there is nothing to simplify', /needs no simplifying/.test(advice), advice);
+  ok('having actually tried more than one setting', /Tried [2-9]/.test(advice), advice);
+  ok('and it converted at what it chose',
+    !(await page.locator('#report-block').isHidden()));
 
   console.log('\n=== 8. a scan is called a scan ===');
   await page.reload();

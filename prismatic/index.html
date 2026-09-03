@@ -71,7 +71,9 @@
           <input id="opt-simplify" type="range" min="0" max="100" step="1" value="50"
                  aria-label="How far to simplify the model"/>
           <div class="pr-scale"><span>faithful</span><span>simple</span></div>
-          <div class="pr-reading" id="simplify-reading">0.05 mm · 1.5°</div>
+          <div class="pr-reading" id="simplify-reading">0.05 mm</div>
+          <div class="pr-advice" id="simplify-advice" hidden></div>
+          <button class="pr-btn" id="btn-best" type="button" disabled>Find the best setting</button>
         </div>
         <p class="pr-hint" id="simplify-note">
           How far the surface is allowed to move. Push it and more of the mesh

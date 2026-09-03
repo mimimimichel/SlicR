@@ -99,9 +99,18 @@
    * modelled-by-hand part that is the difference between a thousand faces and
    * fifty.
    */
-  var TIGHTEST = -3.9;      // log10 of both, as a fraction of the part, at rest
-  var REWRITE = -3.4;       // how far the rebuild may go, pushed all the way
-  var RESHAPE = -2.0;       // and how far a recognised surface may
+  var TIGHTEST = -3.9;      // log10 of the shape tolerance, as a fraction of the part, at rest
+  var RESHAPE = -2.0;       // and how far it may go, pushed all the way
+
+  // The rebuild does not move with the gauge, and it took a while to see that
+  // it should not. Two levers on one slider means every notch changes the mesh
+  // the recognition is then run on, and the answer jumps about for reasons that
+  // have nothing to do with what was asked: on a rosary the count went 583, then
+  // 1030, then 60. Held still, every part tried comes back monotone — more
+  // simplification, fewer faces, every time. And it costs nothing, because
+  // recognising a plane is what simplifies flat faces now, not the rebuild.
+  var REWRITE = -3.75;      // how far the rebuild may move the mesh, always
+  var FACET = 0.7;          // deg — and how far a facet may lean from its face
 
   // And how far the shape tolerance has to be able to reach.
   //
@@ -143,12 +152,9 @@
     var floor = scale * Math.pow(10, TIGHTEST);
     var reach = Math.log(topShape(size, mesh) / floor) / Math.LN10;
     return {
-      deviation: scale * Math.pow(10, TIGHTEST + (REWRITE - TIGHTEST) * t),
+      deviation: scale * Math.pow(10, REWRITE),
       tolerance: floor * Math.pow(10, reach * t),
-      // The angle opens with it, from a fifth of a degree to three: it is the
-      // same question asked of the facets rather than of the corners.
-      angle: Math.pow(10, Math.log(0.2) / Math.LN10 +
-        (Math.log(3) / Math.LN10 - Math.log(0.2) / Math.LN10) * t)
+      angle: FACET
     };
   }
 
@@ -207,10 +213,11 @@
    */
   function showReading(tail) {
     var t = tolerances();
-    var shapes = t.tolerance > t.deviation * 1.05
-      ? ' · shapes to <b>' + roundish(t.tolerance) + ' mm</b>' : '';
-    el('simplify-reading').innerHTML = '<b>' + roundish(t.deviation) + ' mm</b> · ' +
-      t.angle.toFixed(t.angle < 1 ? 2 : 1) + '°' + shapes + (tail ? ' · ' + tail : '');
+    // The shape tolerance leads, because it is the one the gauge moves and the
+    // one that decides what comes back. What the rebuild is held to is said
+    // after it, small, because it no longer changes.
+    el('simplify-reading').innerHTML = 'shapes to <b>' + roundish(t.tolerance) + ' mm</b>' +
+      ' · mesh held to ' + roundish(t.deviation) + ' mm' + (tail ? ' · ' + tail : '');
   }
 
   function tolerances() {
@@ -224,6 +231,112 @@
       snapAxes: el('opt-square').checked,
       recognise: el('opt-recognise').checked
     };
+  }
+
+  /**
+   * The setting to use, found by trying them rather than by guessing.
+   *
+   * The gauge is a proportion of the part and of its features, which is the
+   * right shape for a guess and is still a guess: how far a particular mesh can
+   * be pushed before it stops being the part depends on what is on it. A ring
+   * with lettering round the inside gives up its lettering somewhere the maths
+   * cannot know in advance.
+   *
+   * So it is measured. The rebuild is done once — it no longer moves with the
+   * gauge, which is what makes this cheap — and the recognition is run at seven
+   * settings across the slider. What comes back is a count of faces at each.
+   *
+   * Then: the fewest faces wins, and among the settings that get within a sixth
+   * of the fewest, the *most faithful* one is taken. That last part is the
+   * whole of it. A box is six faces at every setting, so it is left at the
+   * faithful end and the answer is "this needs no simplifying at all". A plate
+   * with a bore is thirty-eight faces until the cylinder is found and seven
+   * after, so it stops the moment the cylinder appears rather than being pushed
+   * on to gain nothing and lose accuracy.
+   */
+  function findBest() {
+    if (!state.source || state.busy) return;
+    if (state.report) reset();
+    state.busy = true;
+    var settings = tolerances();
+    var steps = [0, 17, 33, 50, 67, 83, 100];
+    var counts = [];
+
+    toast('Trying seven settings…', null, true);
+    setTimeout(function () {
+      var report;
+      try {
+        report = window.Prismatic.toSolid(state.source, settings);
+      } catch (e) {
+        state.busy = false;
+        toast('The conversion failed: ' + (e.message || e), 'bad');
+        return;
+      }
+      if (!report.ok) {
+        state.busy = false;
+        toast('Left alone. ' + report.reason, 'bad');
+        return;
+      }
+      var size = modelSize(), mesh = meshFaceting();
+
+      // The count falls as the gauge is pushed, so the settings do not all have
+      // to be tried: the loosest says how few faces there are to be had, and
+      // then it is a question of how far left that still holds. Four or five
+      // builds instead of seven, on a part where each one is seconds.
+      var bodies = new Array(steps.length);
+      function measure(at, then) {
+        if (counts[at] !== undefined) { then(); return; }
+        toast('Trying the settings… ' + (tried + 1), null, true);
+        setTimeout(function () {
+          var tol = gaugeToTolerances(steps[at], size, mesh).tolerance;
+          var body = null;
+          try {
+            body = window.PrismaticSolid.build(report.brep, {
+              tolerance: tol, recognise: settings.recognise
+            });
+          } catch (e) { body = null; }
+          bodies[at] = body;
+          counts[at] = body ? body.faces.length : Infinity;
+          tried++;
+          then();
+        }, 0);
+      }
+
+      var tried = 0;
+      var low = 0, high = steps.length - 1, pick = steps.length - 1;
+      measure(steps.length - 1, function () {
+        var target = counts[steps.length - 1] * 1.15;
+        (function narrow() {
+          if (low > high) { chosen(); return; }
+          var mid = (low + high) >> 1;
+          measure(mid, function () {
+            if (counts[mid] <= target) { pick = mid; high = mid - 1; }
+            else low = mid + 1;
+            narrow();
+          });
+        })();
+      });
+
+      function chosen() {
+        state.busy = false;
+        state.byGauge = true;
+        el('opt-simplify').value = steps[pick];
+        applyGauge(false);
+        var note = el('simplify-advice');
+        var loosest = counts[steps.length - 1];
+        note.innerHTML = 'Tried ' + tried + ' settings. <b>' + count(counts[pick]) + ' faces</b> here' +
+          (pick === 0
+            ? ', and pushing further gained nothing — this part needs no simplifying.'
+            : (pick < steps.length - 1
+              ? ', the fewest there are to be had, at the most faithful setting that gets them.'
+              : '.')) +
+          (pick < steps.length - 1 && counts[pick] > loosest
+            ? ' The loosest setting reaches ' + count(loosest) + ', which is not worth what it costs.'
+            : '');
+        note.hidden = false;
+        convert(null, { report: report, body: bodies[pick] });
+      }
+    }, 40);
   }
 
   // ---------------------------------------------------------------------------
@@ -333,6 +446,8 @@
     // conversion that is no longer the mesh that was opened.
     el('facts-head').textContent = state.report ? 'The rebuilt solid' : 'The mesh';
     el('btn-convert').disabled = !found.triangles || !!state.report;
+    // Searching stays offered after a conversion: it puts the mesh back itself.
+    el('btn-best').disabled = !found.triangles;
     el('btn-step').disabled = !found.triangles;
     el('btn-stl').disabled = !found.triangles;
     el('views').hidden = !found.triangles;
@@ -342,14 +457,16 @@
   // Doing it
   // ---------------------------------------------------------------------------
 
-  function convert(then) {
+  function convert(then, ready) {
     if (!state.current || state.busy) return;
     state.busy = true;
     toast('Rebuilding the solid…', null, true);
     setTimeout(function () {
       var report;
       try {
-        report = window.Prismatic.toSolid(state.source, tolerances());
+        // The search has already done this at the setting it chose, and the
+        // rebuild no longer moves with the gauge, so there is nothing to redo.
+        report = ready ? ready.report : window.Prismatic.toSolid(state.source, tolerances());
       } catch (e) {
         state.busy = false;
         toast('The conversion failed: ' + (e.message || e), 'bad');
@@ -365,7 +482,7 @@
       }
       var settings = tolerances();
       try {
-        state.body = window.PrismaticSolid.build(report.brep, {
+        state.body = ready && ready.body ? ready.body : window.PrismaticSolid.build(report.brep, {
           tolerance: settings.tolerance,
           recognise: settings.recognise
         });
@@ -509,6 +626,7 @@
     state.body = null;
     state.saved = null;
     el('report-block').hidden = true;
+    el('simplify-advice').hidden = true;
     el('saved').innerHTML = '';
     hideToast();
     look();
@@ -530,6 +648,7 @@
     state.body = null;
     state.framed = false;
     el('report-block').hidden = true;
+    el('simplify-advice').hidden = true;
     el('saved').innerHTML = '';
     el('empty').hidden = true;
     el('file-name').textContent = name;
@@ -776,8 +895,10 @@
     // the whole gauge is one answer rather than a hundred, and the answer is
     // the model itself rather than a description of it — the point of a gauge
     // being that you can see what it did.
+    el('btn-best').onclick = findBest;
     el('opt-simplify').addEventListener('input', function () {
       state.byGauge = true;
+      el('simplify-advice').hidden = true;
       applyGauge(false);
     });
     el('opt-simplify').addEventListener('change', function () {

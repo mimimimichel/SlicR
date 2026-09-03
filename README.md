@@ -158,17 +158,32 @@ simplification is something you watch rather than something you are told about.
 What it means is a proportion of the part, so the same setting is sensible on a
 five-millimetre bead and on a three-hundred-millimetre bracket.
 
-It drives two tolerances, and they are not the same tolerance. How far the
-**rebuild** may move the mesh is a rewrite of the triangles themselves: open
-that up and faces reach across features, corners are flung onto crossings
-nowhere near where they were, and the conversion refuses because the volume no
-longer matches. It stays modest. How far a **recognised surface** may sit off
-the facets it replaces is a different question — a cylinder put back where a
-hundred little planes were is not a rewrite, it is the mesh's own surface named
-— and naming it generously is exactly what somebody pushing a slider marked
-*simple* is asking for. That one runs out to a percent of the part. On a part
-modelled by hand it is the difference between a thousand faces and fifty, and
-tying the two together was for a long time the single worst thing in here.
+It moves **one** tolerance, and getting to one was most of the work. How far a
+**recognised surface** may sit off the facets it replaces is the whole of the
+simplification: a cylinder put back where a hundred little planes were is not a
+rewrite of the mesh, it is the mesh's own surface named, and naming it
+generously is exactly what somebody pushing a slider marked *simple* is asking
+for. How far the **rebuild** may move the mesh is a different question with a
+different answer — open that up and faces reach across features, corners are
+flung onto crossings nowhere near where they were, and the conversion refuses
+because the volume no longer matches. It is held still, at a thousandth of the
+part, whatever the gauge says.
+
+Moving both together was the last thing making the answer jerk about. Every
+notch changed the mesh the recognition was then run on, so the count went 583,
+then 1030, then 60 for reasons that had nothing to do with what was asked. Held
+still, every part tried comes back monotone: more simplification, fewer faces,
+every time.
+
+**Or press *Find the best setting*** and it is measured rather than guessed. The
+rebuild is done once, the recognition is run at settings across the slider, and
+the fewest faces wins — but among the settings that get within a sixth of the
+fewest, the *most faithful* one is taken. That last part is the whole of it. A
+box is six faces at every setting, so it is left at the faithful end and told
+"this needs no simplifying at all"; a plate with a bore stops the moment the
+cylinder is found rather than being pushed on to gain nothing and lose accuracy;
+a rosary of 43,000 triangles goes all the way and comes back as sixty faces. It
+costs three or four builds, not seven, because the count only falls.
 
 How far it can reach is set by the mesh, not by the part, and that is worth
 saying plainly because it is where the gauge used to be useless. A tessellated

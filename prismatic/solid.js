@@ -305,12 +305,23 @@
      * to ask of instead of a dozen — the question is put again. That is when
      * the doughnut appears, and the sphere that had been creeping along it
      * hands over. Two or three rounds of that and it stops changing its mind.
+     *
+     * What comes back is every kind that got anywhere, best first, and not just
+     * the winner. The one that reaches furthest is not always the one that can
+     * be made exact over everything it reached, and when it could not the whole
+     * region was given up — which is why opening the tolerance could *lose* a
+     * face that a tighter one had found, in clumps of fifty at a time, and why
+     * the middle of the gauge wandered. Now the winner hands over rather than
+     * taking the region down with it.
      */
     function reach(seed, taken) {
+      var every = [];
       var best = null;
       for (var k = 0; k < KINDS.length; k++) {
         var tried = grow({ members: seed }, KINDS[k], taken);
-        if (tried && preferred(tried, best)) best = tried;
+        if (!tried) continue;
+        every.push(tried);
+        if (preferred(tried, best)) best = tried;
       }
       if (!best) return null;
 
@@ -324,7 +335,27 @@
         if (!again || !preferred(again, best)) break;
         best = again;
       }
-      return best;
+
+      // Every kind that got anywhere, whether from the seed or from where the
+      // winner ended up, best first. Growing the alternatives only from the
+      // winner's territory was not enough and the way it was not enough is
+      // exact: a seed of fourteen facets on the underside of a band grows as a
+      // sphere of fifty-five, the sphere cannot be made exact over all of them,
+      // and a plane grown from *those fifty-five* cannot hold either because
+      // they are curved — so the region was given up, two hundred facets at a
+      // time. The plane grown from the seed holds perfectly well, and it is
+      // that one that has to still be on the list.
+      if (every.indexOf(best) < 0) every.push(best);
+      for (var m = 0; m < KINDS.length; m++) {
+        if (KINDS[m] === best.surface.type) continue;
+        var also = grow(best, KINDS[m], taken);
+        if (also) every.push(also);
+      }
+      every = every.filter(function (x) { return x.members.length >= o.minFaces; });
+      every.sort(function (x, y) {
+        return preferred(x, y) ? -1 : (preferred(y, x) ? 1 : 0);
+      });
+      return every.length ? every : null;
     }
 
     // Over and over until nothing new is found. One pass is not enough and the
@@ -343,8 +374,20 @@
       var seed = seedAround(start, taken);
       if (seed.length < o.minFaces) continue;
 
-      var best = reach(seed, taken);
-      if (!best || best.members.length < o.minFaces) continue;
+      var options = reach(seed, taken);
+      if (!options) continue;
+      var settled = null, members = null, held = null;
+
+      // First time round, only what the region most wants to be. A fallback is
+      // a last resort and has to behave like one: a plane over fourteen facets
+      // of a doughnut holds perfectly well, and accepting it in the first pass
+      // plants a flag the doughnut can then not grow through — twenty-two faces
+      // where there should be one. Later passes, on what is left over, take
+      // whatever can be had.
+      var tries = round ? options.length : 1;
+      for (var choice = 0; choice < tries && !settled; choice++) {
+      var best = options[choice];
+      if (best.members.length < o.minFaces) continue;
 
       // Everything, now, and exactly: a group that grew a face at a time can
       // drift away from where it started, and the fits above were only ever
@@ -359,8 +402,8 @@
       // and the more likely one face at the far end of it is to spoil the lot.
       // A doughnut that grew one facet too far is still a doughnut.
       var kind = best.surface.type;
-      var members = best.members;
-      var settled = null, held = best;
+      members = best.members;
+      held = best;
       for (var pass = 0; pass < 8 && members.length >= o.minFaces; pass++) {
         var state = startFrom(members);
         var tried = P.refit(kind, state.group, thin(state.points), tolerance, thin(state.seats));
@@ -390,7 +433,10 @@
         members = further.members;
         settled = null;
       }
-      if (!settled || members.length < o.minFaces) continue;
+      if (members.length < o.minFaces) settled = null;
+      }
+
+      if (!settled) continue;
 
       for (var m2 = 0; m2 < members.length; m2++) taken[members[m2]] = groups.length;
       groups.push({
