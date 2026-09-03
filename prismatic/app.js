@@ -243,26 +243,44 @@
    * cannot know in advance.
    *
    * So it is measured. The rebuild is done once — it no longer moves with the
-   * gauge, which is what makes this cheap — and the recognition is run at seven
-   * settings across the slider. What comes back is a count of faces at each.
+   * gauge, which is what makes this cheap — and the recognition is run at a
+   * handful of settings. Three to start with, then wherever the answer is
+   * still moving.
    *
-   * Then: the fewest faces wins, and among the settings that get within a sixth
-   * of the fewest, the *most faithful* one is taken. That last part is the
-   * whole of it. A box is six faces at every setting, so it is left at the
-   * faithful end and the answer is "this needs no simplifying at all". A plate
-   * with a bore is thirty-eight faces until the cylinder is found and seven
-   * after, so it stops the moment the cylinder appears rather than being pushed
-   * on to gain nothing and lose accuracy.
+   * What is compared is not the count alone. Each setting comes back with
+   * three numbers: how many faces, how many of them are named shapes rather
+   * than flats, and how far the surfaces actually sit off the mesh — which is
+   * a fraction of what the setting allowed, and is the only honest price.
+   *
+   * Then the settings are walked from the faithful end, and a looser one is
+   * taken over the one in hand when either
+   *
+   *   it removes a seventh of the faces that are left, or
+   *   it finds a shape — a cylinder, a ball — without adding faces.
+   *
+   * That second line is the one that matters to somebody who has to edit the
+   * result. Twenty faces that include four cylinders is a part; twenty flats
+   * in the same places is a picture of one. A step that trades flats for a
+   * cylinder barely moves the count and is worth taking every time.
+   *
+   * Whatever is chosen, the search then walks it back: it halves the distance
+   * to the setting below and keeps going while the answer holds. The gauge
+   * ends up on the *tightest* setting that gives what was chosen — 58 rather
+   * than 67 — which is accuracy that costs nothing.
    */
+  var SEARCH = {
+    budget: 6,      // builds — three to survey, the rest to sharpen
+    keep: 0.85,     // a looser setting must cut this share of the faces
+    close: 7        // gauge points: stop halving once this near
+  };
+
   function findBest() {
     if (!state.source || state.busy) return;
     if (state.report) reset();
     state.busy = true;
     var settings = tolerances();
-    var steps = [0, 17, 33, 50, 67, 83, 100];
-    var counts = [];
 
-    toast('Trying seven settings…', null, true);
+    toast('Trying a few settings…', null, true);
     setTimeout(function () {
       var report;
       try {
@@ -278,65 +296,143 @@
         return;
       }
       var size = modelSize(), mesh = meshFaceting();
+      var probes = [], tried = 0;
 
-      // The count falls as the gauge is pushed, so the settings do not all have
-      // to be tried: the loosest says how few faces there are to be had, and
-      // then it is a question of how far left that still holds. Four or five
-      // builds instead of seven, on a part where each one is seconds.
-      var bodies = new Array(steps.length);
-      function measure(at, then) {
-        if (counts[at] !== undefined) { then(); return; }
+      /**
+       * One setting, built and measured — unless it has been built already, or
+       * unless it asks for a tolerance another setting has already been given.
+       * Near the ends the gauge is clamped by the mesh's own coarseness, so
+       * two settings can be the same question; asking it twice is a build
+       * spent on an answer already in hand.
+       */
+      function probe(gauge, then) {
+        gauge = Math.max(0, Math.min(100, Math.round(gauge)));
+        var known = at(gauge);
+        if (known) { then(known); return; }
+        var tol = gaugeToTolerances(gauge, size, mesh).tolerance;
+        var same = null;
+        probes.forEach(function (p) {
+          if (Math.abs(Math.log(p.tolerance / tol)) < 0.01) same = p;
+        });
+        if (same) {
+          var copy = { gauge: gauge, tolerance: tol, faces: same.faces, named: same.named,
+                       strain: same.strain, body: same.body };
+          insert(copy);
+          then(copy);
+          return;
+        }
         toast('Trying the settings… ' + (tried + 1), null, true);
         setTimeout(function () {
-          var tol = gaugeToTolerances(steps[at], size, mesh).tolerance;
           var body = null;
           try {
             body = window.PrismaticSolid.build(report.brep, {
               tolerance: tol, recognise: settings.recognise
             });
           } catch (e) { body = null; }
-          bodies[at] = body;
-          counts[at] = body ? body.faces.length : Infinity;
           tried++;
-          then();
+          var c = body && body.counts;
+          var made = {
+            gauge: gauge, tolerance: tol, body: body,
+            faces: body ? body.faces.length : Infinity,
+            named: c ? c.cylinder + c.cone + c.sphere + c.torus : 0,
+            strain: body ? (body.strain || 0) : Infinity
+          };
+          insert(made);
+          then(made);
         }, 0);
       }
 
-      var tried = 0;
-      var low = 0, high = steps.length - 1, pick = steps.length - 1;
-      measure(steps.length - 1, function () {
-        var target = counts[steps.length - 1] * 1.15;
+      function at(gauge) {
+        for (var i = 0; i < probes.length; i++) if (probes[i].gauge === gauge) return probes[i];
+        return null;
+      }
+      function insert(p) {
+        var i = 0;
+        while (i < probes.length && probes[i].gauge < p.gauge) i++;
+        probes.splice(i, 0, p);
+      }
+
+      /** Is b worth having instead of a? */
+      function better(b, a) {
+        if (!isFinite(b.faces)) return false;
+        if (b.faces <= a.faces * SEARCH.keep) return true;
+        return b.faces <= a.faces && b.named > a.named;
+      }
+
+      /** The best of what has been tried, walked from the faithful end. */
+      function choose() {
+        var pick = probes[0];
+        for (var i = 1; i < probes.length; i++) if (better(probes[i], pick)) pick = probes[i];
+        return pick;
+      }
+
+      probe(0, function () {
+        probe(50, function () {
+          probe(100, function () { sharpen(); });
+        });
+      });
+
+      // Walk the winner back: the answer is somewhere between the setting
+      // below it — known to be worth pushing past — and the winner itself.
+      // Halve that gap, and move the near end whenever the middle turns out to
+      // be answer enough. What "answer enough" means is the same test read the
+      // other way: the middle stands if the winner is not worth having over it.
+      function sharpen() {
+        var pick = choose(), lo = null;
+        for (var i = 0; i < probes.length; i++) {
+          if (probes[i].gauge < pick.gauge) lo = probes[i];
+        }
         (function narrow() {
-          if (low > high) { chosen(); return; }
-          var mid = (low + high) >> 1;
-          measure(mid, function () {
-            if (counts[mid] <= target) { pick = mid; high = mid - 1; }
-            else low = mid + 1;
+          if (!lo || tried >= SEARCH.budget || pick.gauge - lo.gauge <= SEARCH.close) {
+            chosen(pick);
+            return;
+          }
+          probe((pick.gauge + lo.gauge) / 2, function (mid) {
+            if (better(pick, mid)) lo = mid; else pick = mid;
             narrow();
           });
         })();
-      });
+      }
 
-      function chosen() {
+      function chosen(pick) {
         state.busy = false;
         state.byGauge = true;
-        el('opt-simplify').value = steps[pick];
+        el('opt-simplify').value = pick.gauge;
         applyGauge(false);
-        var note = el('simplify-advice');
-        var loosest = counts[steps.length - 1];
-        note.innerHTML = 'Tried ' + tried + ' settings. <b>' + count(counts[pick]) + ' faces</b> here' +
-          (pick === 0
-            ? ', and pushing further gained nothing — this part needs no simplifying.'
-            : (pick < steps.length - 1
-              ? ', the fewest there are to be had, at the most faithful setting that gets them.'
-              : '.')) +
-          (pick < steps.length - 1 && counts[pick] > loosest
-            ? ' The loosest setting reaches ' + count(loosest) + ', which is not worth what it costs.'
-            : '');
-        note.hidden = false;
-        convert(null, { report: report, body: bodies[pick] });
+        el('simplify-advice').innerHTML = advice(pick, probes, tried);
+        el('simplify-advice').hidden = false;
+        convert(null, { report: report, body: pick.body });
       }
     }, 40);
+  }
+
+  /**
+   * What was chosen and what it cost, in the terms the choice was made in.
+   * Somebody who disagrees with the answer can only move the gauge sensibly if
+   * they are told what the settings either side of it do.
+   */
+  function advice(pick, probes, tried) {
+    var loosest = probes[probes.length - 1];
+    var tightest = probes[0];
+    var said = 'Tried ' + tried + ' setting' + (tried === 1 ? '' : 's') +
+      '. <b>' + count(pick.faces) + ' face' + (pick.faces === 1 ? '' : 's') + '</b> here';
+    if (pick.named) {
+      said += ', ' + count(pick.named) + ' of them ' +
+        (pick.named === 1 ? 'a named shape' : 'named shapes') + ' rather than flats';
+    }
+    said += pick.strain > 1e-6
+      ? ', with the surfaces sitting ' + mm(pick.strain) + ' off the mesh.'
+      : ', sitting exactly on the mesh.';
+
+    if (pick === tightest) {
+      said += ' Pushing further ' + (loosest.faces >= tightest.faces
+        ? 'gained nothing — this part needs no simplifying.'
+        : 'reaches ' + count(loosest.faces) + ' faces, which is not worth what it costs.');
+    } else if (pick !== loosest && loosest.faces < pick.faces) {
+      said += ' The loosest setting reaches ' + count(loosest.faces) +
+        ', for ' + mm(loosest.strain) + ' — not worth it.';
+    }
+    return said;
   }
 
   // ---------------------------------------------------------------------------
@@ -592,7 +688,13 @@
       // of the gauge a few of them stay off. Saying so is better than the file
       // saying it for us in somebody else's modeller.
       state.body ? ['Corners off their faces',
-        state.body.slack < 1e-9 ? 'none' : mm(state.body.slack)] : null
+        state.body.slack < 1e-9 ? 'none' : mm(state.body.slack)] : null,
+      // And what the setting was actually spent on, which is not the setting.
+      // A shape tolerance is a permission; this is the bill. On a part that
+      // fits well it is a fraction of what was allowed, and knowing that is
+      // what tells somebody the gauge has room left in it.
+      state.body ? ['Surfaces off the mesh',
+        state.body.strain < 1e-9 ? 'none' : mm(state.body.strain)] : null
     ]);
     el('report-block').hidden = false;
   }

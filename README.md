@@ -176,14 +176,33 @@ still, every part tried comes back monotone: more simplification, fewer faces,
 every time.
 
 **Or press *Find the best setting*** and it is measured rather than guessed. The
-rebuild is done once, the recognition is run at settings across the slider, and
-the fewest faces wins — but among the settings that get within a sixth of the
-fewest, the *most faithful* one is taken. That last part is the whole of it. A
-box is six faces at every setting, so it is left at the faithful end and told
-"this needs no simplifying at all"; a plate with a bore stops the moment the
-cylinder is found rather than being pushed on to gain nothing and lose accuracy;
-a rosary of 43,000 triangles goes all the way and comes back as sixty faces. It
-costs three or four builds, not seven, because the count only falls.
+rebuild is done once — that is what makes this cheap — and the recognition is
+run three times to survey the slider, then wherever the answer is still moving.
+
+Each setting comes back with three numbers: how many faces, how many of them
+are *named shapes* rather than flats, and how far the surfaces actually ended
+up sitting off the mesh. That last one is not the tolerance. A tolerance is a
+permission; this is the bill, and on a part that fits well it is a fraction of
+what was allowed. The demo plate is asked for 0.030 mm and spends 0.016.
+
+The settings are then walked from the faithful end, and a looser one is taken
+over the one in hand when either **it removes a seventh of the faces that are
+left**, or **it finds a shape without adding faces**. The second line is the
+one that matters to somebody who then has to edit the thing. Twenty faces that
+include four cylinders is a part; twenty flats in the same places is a picture
+of one. A step that trades flats for a cylinder barely moves the count and is
+worth taking every time — counting faces alone would refuse it.
+
+Then it walks the winner *back*: it halves the distance to the setting below
+and keeps going while the answer holds, so the gauge ends up on the tightest
+setting that still gives what was chosen — 38 rather than 50 — which is
+accuracy that costs nothing. Six builds, and the number it lands on is its own
+rather than one of a handful of stops.
+
+A box is six faces at every setting, so it is left at the faithful end and told
+"this needs no simplifying at all". A plate with a bore stops at the cylinder
+rather than being pushed on to gain nothing and lose accuracy. A rosary of
+43,000 triangles goes all the way and comes back as sixty-one faces.
 
 How far it can reach is set by the mesh, not by the part, and that is worth
 saying plainly because it is where the gauge used to be useless. A tessellated

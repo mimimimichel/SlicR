@@ -1116,12 +1116,17 @@
 
     var vertices = brep.vertices;
     var seams = [];
+    // How far the mesh itself had to move to become these surfaces. Not the
+    // tolerance that was allowed — what was actually spent of it, which is
+    // usually a fraction and is the only honest way to price a setting.
+    var strain = 0;
 
     found.groups.forEach(function (group) {
       // A group dissolved for being too small to be a face has nothing left to
       // bound, and a surface with nothing to bound is not the same thing as a
       // surface that closes on itself.
       if (!group.members.length) return;
+      if (group.surface.deviation > strain) strain = group.surface.deviation;
       var loops = outlineOf(brep, brep.faces, group.members);
 
       // A surface with no boundary at all. A whole ball is one case and a whole
@@ -1242,6 +1247,7 @@
       // own edge. A file has to declare an accuracy and then be that accurate,
       // and a fitted cylinder is not exact the way a fitted plane is.
       slack: slackOf({ vertices: coordinates, edges: built.edges, faces: out }),
+      strain: strain,
       counts: counts
     };
   }

@@ -622,5 +622,32 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
   });
 }
 
+console.log('\n=== 12. what a setting actually cost, as opposed to what it allowed ===');
+{
+  // Choosing a setting by the tolerance it was given is choosing by the budget
+  // rather than by the bill. What matters is how far the mesh really had to
+  // move to become these surfaces, which is a fraction of what was allowed on
+  // a part that fits well and all of it on one that does not — so it is
+  // measured and reported, and the search upstairs spends it rather than the
+  // tolerance.
+  var flat = P.toSolid(box(20, 12, 8), { deviation: 0.01 });
+  var square = Solid.build(flat.brep, { tolerance: 0.5 });
+  ok('a box sits exactly on its own planes, however loose the setting (' +
+    square.strain.toExponential(1) + ')', square.strain < 1e-9, square.strain);
+
+  var holed = P.toSolid(drilled(40, 30, 5, 6, 32), { deviation: 0.01 });
+  var bore = Solid.build(holed.brep, { tolerance: 0.3 });
+  ok('a bore found as a cylinder says how far off the mesh it sits (' +
+    bore.strain.toFixed(4) + ' mm)', bore.strain > 1e-6 && bore.strain <= 0.3 + 1e-9,
+    bore.strain);
+  // The whole point of measuring it: the setting had to be 0.3 for the
+  // cylinder to be found at all, and having found it the surface sits a good
+  // deal closer than that. Reporting 0.3 would be reporting the permission.
+  ok('and that it sits closer than it was allowed to', bore.strain < 0.3 * 0.9,
+    bore.strain);
+  ok('a body with nothing recognised in it has nothing to declare',
+    Solid.build(holed.brep, { recognise: false }).strain === 0);
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

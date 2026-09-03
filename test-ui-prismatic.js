@@ -380,6 +380,33 @@ function sphereSTL(seg = 24, r = 10) {
   ok('and it converted at what it chose',
     !(await page.locator('#report-block').isHidden()));
 
+  // A part that does have something to simplify. The search is not picking one
+  // of a handful of stops on the slider: having decided what answer it wants,
+  // it walks back towards the faithful end while that answer holds, and stops
+  // on the tightest setting that still gives it. So the number it lands on is
+  // its own, and what it says is what the choice was made on — how many faces,
+  // how many of them are shapes rather than flats, and how far the surfaces
+  // ended up sitting off the mesh, which is a good deal less than it allowed.
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.click('[data-demo]');
+  await settled();
+  await page.click('#btn-best');
+  await page.waitForFunction(() =>
+    document.getElementById('toast').hidden && !document.getElementById('btn-step').disabled,
+    { timeout: 120000 });
+  const bored = await page.locator('#opt-simplify').inputValue();
+  const found = (await page.locator('#simplify-advice').textContent()).trim();
+  console.log('  bore -> gauge ' + bored + ': ' + found);
+  ok('a part with a bore is simplified rather than left alone',
+    parseInt(bored, 10) > 0 && !/needs no simplifying/.test(found), bored + ' ' + found);
+  ok('and it found the cylinder', /named shape/.test(found), found);
+  ok('and says how far off the mesh that put the surfaces', /off the mesh/.test(found), found);
+  const cost = parseFloat((found.match(/sitting ([\d.]+) mm off/) || [])[1]);
+  const allowed = parseFloat(await page.locator('#opt-tolerance').inputValue());
+  ok('by what it spent, not by what it was allowed (' + cost + ' of ' + allowed + ' mm)',
+    cost > 0 && cost <= allowed + 1e-9, cost + ' vs ' + allowed);
+
   console.log('\n=== 8. a scan is called a scan ===');
   await page.reload();
   await page.waitForSelector('#btn-open');
