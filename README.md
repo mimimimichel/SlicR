@@ -192,7 +192,15 @@ it has to be on the cylinder. Otherwise the file says the edge of a face is
 somewhere the face is not, which is what a modeller trips over and why a body
 will not stitch.
 
-The screen shows the same thing. The triangles are moved onto the surfaces they
+The screen shows the same thing, and it has to show all of it: which face each
+triangle ended up on is looked up by where the faces are rather than by asking
+every triangle about every face, so a solid of twelve thousand faces is worked
+out in sixty milliseconds. Giving up past a few hundred, as it used to, was
+worse than slow — the edges of the solid went on being drawn over the colours of
+the mesh underneath, one thing's boundaries on another thing's faces, which
+looks exactly like patches of different colour with no edge between them.
+
+The triangles are moved onto the surfaces they
 were recognised as, and — this is what actually makes it look like the answer —
 shaded with those surfaces' own normals rather than the facets'. A cylinder
 found in twenty-four sides has every corner on the cylinder already, so nothing

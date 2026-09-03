@@ -373,11 +373,15 @@
           showSolidReading();
           var Solid = window.PrismaticSolid;
           var features = Solid.featuresOf(state.body, found.positions, settings.tolerance);
+          // Both or neither. Drawing the solid's edges over the mesh's own
+          // colours puts one thing's boundaries on another thing's faces, and
+          // what that looks like is patches of different colour with no edge
+          // between them.
           if (features) {
             var drawn = Solid.smoothed(state.body, found.positions, features, settings.tolerance);
             state.viewer.setMesh(drawn, features, Solid.normalsOf(state.body, drawn, features));
+            state.viewer.setEdges(solidEdges(state.body));
           }
-          state.viewer.setEdges(solidEdges(state.body));
         }
         if (typeof then === 'function') then();
       });

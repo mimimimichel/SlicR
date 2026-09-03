@@ -1097,10 +1097,11 @@
    * of it — so asking every triangle about every face is nothing.
    */
   function featuresOf(body, positions, tolerance) {
-    if (!body || !body.faces.length || body.faces.length > 400) return null;
+    if (!body || !body.faces.length) return null;
     var P = root.PrismaticPrimitives;
     var count = (positions.length / 9) | 0;
     var out = new Int32Array(count);
+    var near = whereFaces(body, tolerance);
     // The whole triangle has to be on the surface, and no further off it than
     // the surface was allowed to be off the facets in the first place. Asking
     // only about the middle, and allowing twice the tolerance while asking,
@@ -1108,6 +1109,7 @@
     // this only chose a colour and is not harmless now that it also decides
     // where the corner gets drawn.
     var slack = Math.max(tolerance, 1e-6);
+    var cosTangent = Math.cos(DEFAULTS.tangentAngle * Math.PI / 180);
     for (var t = 0; t < count; t++) {
       var o = t * 9;
       var mid = [
@@ -1121,20 +1123,34 @@
       var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       var normal = [nx / len, ny / len, nz / len];
 
+      var corners = [
+        [positions[o], positions[o + 1], positions[o + 2]],
+        [positions[o + 3], positions[o + 4], positions[o + 5]],
+        [positions[o + 6], positions[o + 7], positions[o + 8]]
+      ];
+
       var best = -1, bestGap = Infinity;
-      for (var f = 0; f < body.faces.length; f++) {
+      var ask = near(mid);
+      for (var i = 0; i < ask.length; i++) {
+        var f = ask[i];
         var surface = body.faces[f].surface;
         var gap = P.distance(surface, mid);
         if (!(gap <= slack) || gap >= bestGap) continue;
         var off = 0;
         for (var c = 0; c < 3; c++) {
-          var corner = P.distance(surface, [positions[o + c * 3], positions[o + c * 3 + 1], positions[o + c * 3 + 2]]);
+          var corner = P.distance(surface, corners[c]);
           if (corner > off) off = corner;
         }
         if (!(off <= slack)) continue;
-        var facing = P.normalAt(surface, mid);
-        if (!facing) continue;
-        if (normal[0] * facing[0] + normal[1] * facing[1] + normal[2] * facing[2] < 0.7) continue;
+        // The same question the recognition asked when it took this facet into
+        // the surface, asked the same way. A fixed angle here and a measured one
+        // there is not a detail: the slivers where a surface turns over lean
+        // thirty degrees and more, the recognition keeps them, and refusing them
+        // here drew them as belonging to nothing — a patch of a different colour
+        // in the middle of a face, with no edge between, because there is no
+        // edge between. Two or three triangles in a hundred, which is enough to
+        // make a doughnut look moth-eaten.
+        if (!P.alongside(surface, normal, corners, cosTangent, slack)) continue;
         best = f; bestGap = gap;
       }
       out[t] = best >= 0 ? best : body.faces.length;
@@ -1242,6 +1258,81 @@
       if (!objected) break;
     }
     return out;
+  }
+
+  /**
+   * Which faces are worth asking about a point, rather than all of them.
+   *
+   * Asking every triangle about every face is nothing on a bracket and is a
+   * hundred and sixty million distance calculations on a sculpt, which is why
+   * there used to be a limit past which the drawing simply was not worked out —
+   * and that was worse than slow. The edges of the solid went on being drawn
+   * over the colours of the mesh underneath, so the picture showed one thing's
+   * colours with another thing's edges: patches of different colour with no
+   * edge between them, which is exactly what it looked like.
+   *
+   * So the faces are put in a coarse grid by where their corners are. A face
+   * too big to be worth binning — a wall spanning the part — is asked about
+   * every time, and there are never many of those.
+   */
+  function whereFaces(body, tolerance) {
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var boxes = body.faces.map(function (face) {
+      var a = [Infinity, Infinity, Infinity], b = [-Infinity, -Infinity, -Infinity];
+      (face.points || []).forEach(function (loop) {
+        loop.forEach(function (v) {
+          for (var k = 0; k < 3; k++) {
+            var x = body.vertices[v * 3 + k];
+            if (x < a[k]) a[k] = x;
+            if (x > b[k]) b[k] = x;
+            if (x < lo[k]) lo[k] = x;
+            if (x > hi[k]) hi[k] = x;
+          }
+        });
+      });
+      return { a: a, b: b };
+    });
+
+    var span = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    var all = [];
+    for (var f = 0; f < body.faces.length; f++) all.push(f);
+    if (!(span > 0)) return function () { return all; };
+
+    var slack = Math.max(tolerance, span * 1e-6);
+    var cells = Math.max(1, Math.min(48, Math.round(Math.cbrt(body.faces.length) * 2)));
+    var step = span / cells;
+    var wide = [];
+    var bins = new Map();
+    var key = function (x, y, z) { return (x * 64 + y) * 64 + z; };
+    var index = function (p, k) {
+      var at = Math.floor((p - lo[k]) / step);
+      return at < 0 ? 0 : at > cells ? cells : at;
+    };
+
+    boxes.forEach(function (box, id) {
+      if (!isFinite(box.a[0])) { wide.push(id); return; }
+      var x0 = index(box.a[0] - slack, 0), x1 = index(box.b[0] + slack, 0);
+      var y0 = index(box.a[1] - slack, 1), y1 = index(box.b[1] + slack, 1);
+      var z0 = index(box.a[2] - slack, 2), z1 = index(box.b[2] + slack, 2);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 64) { wide.push(id); return; }
+      for (var x = x0; x <= x1; x++) {
+        for (var y = y0; y <= y1; y++) {
+          for (var z = z0; z <= z1; z++) {
+            var at = key(x, y, z);
+            var list = bins.get(at);
+            if (!list) { list = []; bins.set(at, list); }
+            list.push(id);
+          }
+        }
+      }
+    });
+
+    return function (p) {
+      var list = bins.get(key(index(p[0], 0), index(p[1], 1), index(p[2], 2)));
+      if (!list) return wide;
+      if (!wide.length) return list;
+      return list.concat(wide);
+    };
   }
 
   /**

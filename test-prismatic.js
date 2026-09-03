@@ -426,6 +426,19 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
   // through the surface, and a few hundred of those is shrapnel rather than a
   // part. So: nothing may turn inside out, and nothing may move further than
   // the tolerance that put the surface there.
+  // Working the drawing out used to be given up on past four hundred faces,
+  // and the edges of the solid went on being drawn over the colours of the mesh
+  // underneath — one thing's boundaries on another thing's faces. There is no
+  // limit now: the faces are looked up by where they are rather than asked one
+  // by one.
+  {
+    var many = P.toSolid(sphere(48, 10), { deviation: 0.002, angle: 0.2 });
+    var crowd = Solid.build(many.brep, { tolerance: 0.002 });
+    ok('a solid of ' + crowd.faces.length + ' faces is still worked out',
+      crowd.faces.length > 400 && !!Solid.featuresOf(crowd, many.positions, 0.002),
+      crowd.faces.length);
+  }
+
   // The ball moves and the bore does not, and both are right. Every corner of a
   // bore's facets already sits on the cylinder — the polygon touches the circle
   // there, it is the middles that are inside it, and a mesh has no vertex in
@@ -437,7 +450,16 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
     var built = P.toSolid(mesh, { deviation: 0.02 });
     var body = Solid.build(built.brep, { tolerance: tol });
     var features = Solid.featuresOf(body, built.positions, tol);
-    ok(name + ': every triangle is claimed by a face or by none', !!features);
+    ok(name + ': every triangle is asked which face it is on', !!features);
+    // And every one of them has an answer. A triangle left on no face is drawn
+    // in the leftover colour, so it shows as a patch of a different colour in
+    // the middle of a face with no edge between it and its neighbours — because
+    // there is no edge between them, they are the same face. It happens when
+    // this asks a stricter question than the recognition did.
+    var orphans = 0;
+    for (var q = 0; q < features.length; q++) if (features[q] === body.faces.length) orphans++;
+    ok(name + ': and none of them is left belonging to nothing', orphans === 0,
+      orphans + ' of ' + features.length);
     var drawn = Solid.smoothed(body, built.positions, features, tol);
     var count = built.positions.length / 9;
     var turned = 0, blown = 0, worst = 0;
