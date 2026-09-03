@@ -327,6 +327,16 @@
       return best;
     }
 
+    // Over and over until nothing new is found. One pass is not enough and the
+    // way it is not enough is what made the answer jerk about: a face given up
+    // by a group that had already grown past it — evicted when that group was
+    // fitted to everything it really held — is only ever offered again if its
+    // turn in the order has not gone by. The ones released too late were left
+    // as they were, one face each, and how many of those there were depended on
+    // the tolerance in a way nobody could predict. So the sweep is repeated on
+    // whatever is still loose, until a pass adds nothing.
+    for (var round = 0; round < 4; round++) {
+    var found = groups.length;
     for (var s = 0; s < order.length; s++) {
       var start = order[s];
       if (taken[start] >= 0) continue;
@@ -387,6 +397,8 @@
         surface: settled, members: members.slice(),
         group: held.group, points: held.points, seats: held.seats
       });
+    }
+    if (groups.length === found) break;
     }
 
     // Stragglers. A face left over next to a surface that would have it is
@@ -459,6 +471,7 @@
     var least = tolerance * tolerance;
     if (!(least > 0)) return;
 
+    var was = Int32Array.from(taken);
     var spread = new Array(groups.length).fill(0);
     for (var f = 0; f < faces.length; f++) if (taken[f] >= 0) spread[taken[f]] += weight[f];
     for (var g = 0; g < groups.length; g++) {
@@ -505,6 +518,18 @@
         taken[f2] = best;
         moved = true;
       }
+    }
+
+    // And whatever was let go of and nobody took goes back where it was.
+    // Dissolving a group is only worth doing if its pieces find homes; a group
+    // of a dozen slivers that nothing will have is still one face, and leaving
+    // it dissolved turns one face into a dozen. That is not a detail — it is
+    // what made a looser tolerance give *more* faces than a tighter one, which
+    // is the one thing a gauge must never do.
+    for (var f3 = 0; f3 < faces.length; f3++) {
+      if (taken[f3] >= 0 || was[f3] < 0) continue;
+      taken[f3] = was[f3];
+      groups[was[f3]].members.push(f3);
     }
   }
 

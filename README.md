@@ -180,10 +180,20 @@ millimetre for it; the same shape a modeller left in twenty-four sides asks a
 quarter of one, thirty times as much on a part three times the size. Below that
 price nothing can be recognised however hard the gauge is pushed. So it is
 measured when the file is opened, shown in the panel as **Curves cost at
-least**, and the top of the gauge's travel is whichever is further: a percent of
-the part, or four times that price. A 624-triangle turned part comes back as
+least**, and it sets the floor for the top of the gauge's travel.
+
+The ceiling comes from the same measurement read the other way: the radius those
+folds turn about, which is the size of the *features* rather than the size of
+the part, and those are not the same thing at all. A rosary is sixty-four
+millimetres across and made of beads four millimetres round; a percent of the
+part is a sixth of a bead, and at that tolerance a bead is within reach of being
+called a cylinder — which is what came back, ten beads turned into ten little
+drums. An eighth of the smallest feature's radius is as far as the gauge goes.
+So the top of its travel is four times what the mesh's faceting costs, or the
+lesser of a percent of the part and an eighth of a feature, whichever is more. A 624-triangle turned part comes back as
 **six faces** — two cylinders, a torus, a ball and two ends — where before the
-gauge could not reach far enough to find any of them.
+gauge could not reach far enough to find any of them; a 43,000-triangle rosary
+comes back as **sixty**, its ten beads ten round balls.
 
 And then the faces that are not faces are taken out. On one reported part,
 forty-two of fifty-nine faces carried three hundredths of one percent of the

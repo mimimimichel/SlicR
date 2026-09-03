@@ -1206,6 +1206,7 @@
     }
 
     var cosSharp = Math.cos(SHARP * Math.PI / 180);
+    var coarseness = coarsenessOf(mesh, cosSharp);
     var between = 0, sharp = 0;
     for (var e = 0; e < mesh.pairA.length; e++) {
       var fa = seg.face[mesh.pairA[e]], fb = seg.face[mesh.pairB[e]];
@@ -1220,13 +1221,14 @@
       planarArea: total > 0 ? planar / total : 0,
       sharpness: between > 0 ? sharp / between : 0,
       deviation: worst,
-      faceting: facetingOf(mesh, cosSharp)
+      faceting: coarseness.cost,
+      radius: coarseness.radius
     };
   }
 
   /**
-   * How coarse the mesh is — the one number that says what recognising its
-   * curves is going to cost, before anything is attempted.
+   * Two numbers about the mesh's curves, before anything is attempted: what
+   * naming one costs, and how big they are.
    *
    * A tessellated curve is a polygon, and the surface it stands for passes
    * outside it: with a chord of c and a turn of theta at each fold, the arc
@@ -1234,19 +1236,28 @@
    * polygon a cylinder, and it is a property of the mesh, not of the part. A
    * doughnut in twenty thousand triangles asks seven thousandths of a
    * millimetre; the same shape a modeller left in twenty-four sides asks a
-   * quarter of one — thirty times as much, on a part three times the size.
+   * quarter of one — thirty times as much, on a part three times the size. No
+   * tolerance below it can recognise anything at all.
    *
-   * It matters because no tolerance below it can recognise anything at all,
-   * however hard the gauge is pushed, and until it was measured there was
-   * nothing on the screen to say so. The answer taken is the ninth decile by
-   * length of fold, so that the coarsest part of a mesh sets the price rather
-   * than being averaged away by the finest.
+   * The other number is the radius that fold turns about, which is the size of
+   * the feature rather than the size of the part — and those are not the same
+   * thing at all. A rosary is sixty-four millimetres across and made of beads
+   * four millimetres round: a percent of the part is a sixth of a bead, and at
+   * that tolerance a bead is within reach of being called a cylinder, which is
+   * what it came back as. The chord spans two facets while the turn is measured
+   * across one, so the circle through them has half the radius the chord and
+   * turn alone would give.
+   *
+   * The answers taken are the ninth decile of the cost by length of fold, so
+   * that the coarsest part of a mesh sets the price rather than being averaged
+   * away, and the first quartile of the radius, so that the smallest features
+   * set the ceiling rather than the largest.
    *
    * Only gentle folds count. A fold of twenty degrees or more is an edge of the
-   * part, and an edge of the part costs nothing to keep.
+   * part, and an edge of the part has no curve to pay for and no radius.
    */
-  function facetingOf(mesh, cosSharp) {
-    var cost = [], span = [], total = 0;
+  function coarsenessOf(mesh, cosSharp) {
+    var cost = [], round = [], span = [], total = 0;
     for (var e = 0; e < mesh.pairA.length; e++) {
       var a = mesh.pairA[e], b = mesh.pairB[e], len = mesh.pairLen[e];
       if (!(len > 0)) continue;
@@ -1259,18 +1270,22 @@
       // twice its area over that edge, and the chord spans both of them.
       var chord = (mesh.area[a] + mesh.area[b]) * 2 / len;
       cost.push(chord / 2 * Math.tan(turn / 4));
+      round.push(chord / (4 * Math.sin(turn / 2)));
       span.push(len);
       total += len;
     }
-    if (!cost.length || !(total > 0)) return 0;
-    var order = cost.map(function (_, i) { return i; })
-      .sort(function (x, y) { return cost[x] - cost[y]; });
-    var run = 0;
-    for (var i = 0; i < order.length; i++) {
-      run += span[order[i]];
-      if (run >= total * 0.9) return cost[order[i]];
+    if (!cost.length || !(total > 0)) return { cost: 0, radius: 0 };
+    function at(list, share) {
+      var order = list.map(function (_, i) { return i; })
+        .sort(function (x, y) { return list[x] - list[y]; });
+      var run = 0;
+      for (var i = 0; i < order.length; i++) {
+        run += span[order[i]];
+        if (run >= total * share) return list[order[i]];
+      }
+      return list[order[order.length - 1]];
     }
-    return cost[order[order.length - 1]];
+    return { cost: at(cost, 0.9), radius: at(round, 0.25) };
   }
 
   /** Is this the mesh of a prismatic part at all, or a scan pretending to be one? */
@@ -1295,7 +1310,7 @@
     var mesh = buildMesh(positions, o);
     if (!mesh.count) {
       return {
-        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0,
+        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0, radius: 0,
         verdict: 'empty', watertight: false, openEdges: 0
       };
     }
@@ -1307,6 +1322,7 @@
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
       faceting: stats.faceting,
+      radius: stats.radius,
       deviation: stats.deviation,
       openEdges: mesh.openEdges,
       watertight: mesh.openEdges === 0 && mesh.nonManifold === 0,
@@ -1329,7 +1345,7 @@
     var mesh = buildMesh(positions, o);
     if (!mesh.count) {
       return {
-        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0,
+        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0, radius: 0,
         verdict: 'empty', watertight: false, openEdges: 0,
         positions: new Float32Array(0), face: new Int32Array(0), edges: new Float32Array(0)
       };
@@ -1364,6 +1380,7 @@
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
       faceting: stats.faceting,
+      radius: stats.radius,
       deviation: stats.deviation,
       openEdges: mesh.openEdges,
       watertight: mesh.openEdges === 0 && mesh.nonManifold === 0,
@@ -1435,6 +1452,7 @@
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
       faceting: stats.faceting,
+      radius: stats.radius,
       deviation: stats.deviation,
       moved: snap.worst,
       volume: after,

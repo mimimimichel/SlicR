@@ -120,16 +120,28 @@
   // on a finely tessellated part the first is bigger and nothing changes.
   var COARSE = 4;
 
-  function topShape(size, faceting) {
+  // And a ceiling, from the size of the *features* rather than the size of the
+  // part, because those are not the same thing. A rosary is sixty-four
+  // millimetres across and made of beads four millimetres round; a percent of
+  // the part is a sixth of a bead, and at that tolerance a bead is within reach
+  // of being called a cylinder — which is what came back, ten beads turned into
+  // ten little drums. An eighth of the smallest feature's radius is as far as
+  // the gauge may go, and never less than what this mesh's own faceting costs,
+  // or a coarse mesh could not be recognised at all.
+  var FEATURE = 0.12;
+
+  function topShape(size, mesh) {
     var scale = size > 0 ? size : 100;
-    return Math.max(scale * Math.pow(10, RESHAPE), (faceting || 0) * COARSE);
+    var part = scale * Math.pow(10, RESHAPE);
+    var feature = mesh && mesh.radius > 0 ? mesh.radius * FEATURE : Infinity;
+    return Math.max((mesh && mesh.faceting || 0) * COARSE, Math.min(part, feature));
   }
 
-  function gaugeToTolerances(gauge, size, faceting) {
+  function gaugeToTolerances(gauge, size, mesh) {
     var t = Math.max(0, Math.min(1, gauge / 100));
     var scale = size > 0 ? size : 100;
     var floor = scale * Math.pow(10, TIGHTEST);
-    var reach = Math.log(topShape(size, faceting) / floor) / Math.LN10;
+    var reach = Math.log(topShape(size, mesh) / floor) / Math.LN10;
     return {
       deviation: scale * Math.pow(10, TIGHTEST + (REWRITE - TIGHTEST) * t),
       tolerance: floor * Math.pow(10, reach * t),
@@ -141,18 +153,18 @@
   }
 
   /** And back again, so a hand-typed tolerance moves the gauge to match. */
-  function tolerancesToGauge(tolerance, size, faceting) {
+  function tolerancesToGauge(tolerance, size, mesh) {
     var scale = size > 0 ? size : 100;
     var floor = scale * Math.pow(10, TIGHTEST);
-    var reach = Math.log(topShape(size, faceting) / floor) / Math.LN10;
+    var reach = Math.log(topShape(size, mesh) / floor) / Math.LN10;
     if (!(reach > 0)) return 0;
     var t = Math.log(tolerance / floor) / Math.LN10 / reach;
     return Math.max(0, Math.min(100, Math.round(t * 100)));
   }
 
-  /** How coarse the mesh on screen is, once it has been looked at. */
+  /** What the mesh on screen is like, once it has been looked at. */
   function meshFaceting() {
-    return state.look ? state.look.faceting || 0 : 0;
+    return state.look ? { faceting: state.look.faceting || 0, radius: state.look.radius || 0 } : null;
   }
 
   /** How big the part is, corner to corner. Measured, not asked of the viewer. */

@@ -407,6 +407,18 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
   // mesh, not of the part, which is the whole reason it has to be measured.
   ok('a box has no curves to pay for', P.analyze(fine).faceting < 1e-9,
     P.analyze(fine).faceting);
+  // And how big its curves are, which is not how big the part is. A rosary is
+  // sixty-four millimetres across and made of beads four millimetres round: a
+  // percent of the part is a sixth of a bead, and at that tolerance a bead is
+  // within reach of being called a cylinder. It came back as ten little drums.
+  ok('a ball of ten knows it is a ball of ten (' + P.analyze(sphere(32, 10)).radius.toFixed(2) + ')',
+    near(P.analyze(sphere(32, 10)).radius, 10, 0.3), P.analyze(sphere(32, 10)).radius);
+  ok('and a six millimetre bore that it is six (' + P.analyze(drilled(40, 30, 5, 6, 32)).radius.toFixed(2) + ')',
+    near(P.analyze(drilled(40, 30, 5, 6, 32)).radius, 6, 0.2),
+    P.analyze(drilled(40, 30, 5, 6, 32)).radius);
+  ok('a part with no curves in it has no radius to report',
+    P.analyze(fine).radius === 0, P.analyze(fine).radius);
+
   var fineBall = P.analyze(sphere(64, 10)).faceting;
   var roughBall = P.analyze(sphere(16, 10)).faceting;
   ok('the same ball costs more the more coarsely it is drawn (' +
