@@ -185,12 +185,17 @@ function sphereSTL(seg, r) {
       if (senses.length !== 2) loose++;
       else if (senses[0] === senses[1]) sameWay++;
     });
+    // Eight flat faces and the bore, which the recognition turned back into the
+    // one cylinder it was drilled as.
     ok('and it is still a closed shell: ' + solid.faces.length + ' faces, ' +
-       solid.edgeUse.size + ' edges', loose === 0 && sameWay === 0 && solid.faces.length === 36,
+       solid.edgeUse.size + ' edges', loose === 0 && sameWay === 0 && solid.faces.length === 9,
       loose + ' loose, ' + sameWay + ' agreeing');
     const shape = V.measure(solid);
+    // The bracket, less a round hole rather than the twenty-eight sided one the
+    // mesh had: a circle takes out a little more than the polygon inside it.
+    const expect = (30 * 6 + 6 * 18 - Math.PI * 2.6 * 2.6) * 40;
     ok('enclosing the bracket it started as (' + shape.volume.toFixed(2) + ' mm3)',
-      Math.abs(shape.volume - 10677.62) < 0.01, shape.volume);
+      Math.abs(shape.volume - expect) < 1, shape.volume + ' vs ' + expect.toFixed(2));
 
     const toast = (await page.locator('#toast').textContent()).trim();
     ok('and the page says it is ready rather than saved, which is the truth',

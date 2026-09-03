@@ -9,9 +9,13 @@
  * fillet, sketch on and extrude from — which is the whole reason to have
  * rebuilt the mesh into faces in the first place.
  *
- * Nothing here is a conversion. The faces, their planes and their loops all
- * come out of the rebuild already; this walks them and writes them down in
- * ISO 10303-21, part 21 of the standard everyone calls STEP.
+ * Nothing here is a conversion. The faces, their surfaces and their loops all
+ * come out of the rebuild and the recognition already; this walks them and
+ * writes them down in ISO 10303-21, part 21 of the standard everyone calls
+ * STEP. A face that was found to be a cylinder is written as a cylinder, and
+ * the ring of thirty-two segments around the end of it as one circle — which
+ * is the difference between a hole you can dimension and thirty-two faces you
+ * cannot.
  *
  * Two things have to be right or the file is a pile of surfaces rather than a
  * solid, and both are structural rather than a matter of taste:
@@ -62,13 +66,13 @@
    * three loose parts has to leave here as three solids: one closed shell with
    * three separate skins in it is not a body anyone can open.
    */
-  function components(faces, edges) {
+  function components(faces, edgeFaces) {
     var parent = new Int32Array(faces.length);
     for (var i = 0; i < faces.length; i++) parent[i] = i;
     function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
-    edges.forEach(function (e) {
-      if (e.faces.length < 2) return;
-      var a = find(e.faces[0]), b = find(e.faces[1]);
+    edgeFaces.forEach(function (on) {
+      if (on.length < 2) return;
+      var a = find(on[0]), b = find(on[1]);
       if (a !== b) parent[b] = a;
     });
     var groups = new Map();
@@ -84,50 +88,30 @@
   }
 
   /**
-   * The volume a set of planar faces encloses. On a plane every point has the
-   * same distance to the origin along the normal, so the divergence theorem
-   * collapses to a third of that distance times the area — no triangulating
-   * anything. A shell that comes out negative is inside out: an enclosed
-   * cavity, taken on its own.
+   * What a set of faces encloses. Each one carries what it contributed while it
+   * was still flat, which is the only moment the arithmetic is simple and is
+   * enough for the one question asked of it here: a shell that comes out
+   * negative is inside out, which makes it an enclosed cavity rather than a
+   * body.
    */
   function volumeOf(brep, faces) {
     var total = 0;
-    for (var i = 0; i < faces.length; i++) {
-      var face = brep.faces[faces[i]];
-      total += face.d * areaOf(brep, face) / 3;
-    }
+    for (var i = 0; i < faces.length; i++) total += brep.faces[faces[i]].volume || 0;
     return total;
   }
 
-  function basisOf(face) {
-    var ax = Math.abs(face.x) < 0.9 ? 1 : 0, ay = 1 - ax;
-    var ux = -face.z * ay, uy = face.z * ax, uz = face.x * ay - face.y * ax;
-    var len = Math.sqrt(ux * ux + uy * uy + uz * uz);
-    if (!(len > 0)) { ux = 1; uy = 0; uz = 0; len = 1; }
-    ux /= len; uy /= len; uz /= len;
-    return {
-      ux: ux, uy: uy, uz: uz,
-      vx: face.y * uz - face.z * uy, vy: face.z * ux - face.x * uz, vz: face.x * uy - face.y * ux
-    };
+  function unit(v) {
+    var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return len > 0 ? [v[0] / len, v[1] / len, v[2] / len] : [0, 0, 1];
   }
+  function cross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 
-  /** Signed area in the face's own plane: the outline, less its holes. */
-  function areaOf(brep, face) {
-    var b = basisOf(face);
-    var total = 0;
-    for (var l = 0; l < face.loops.length; l++) {
-      var loop = face.loops[l], sum = 0;
-      for (var i = 0; i < loop.length; i++) {
-        var a = loop[i] * 3, c = loop[(i + 1) % loop.length] * 3;
-        var ax = brep.vertices[a] * b.ux + brep.vertices[a + 1] * b.uy + brep.vertices[a + 2] * b.uz;
-        var ay = brep.vertices[a] * b.vx + brep.vertices[a + 1] * b.vy + brep.vertices[a + 2] * b.vz;
-        var cx = brep.vertices[c] * b.ux + brep.vertices[c + 1] * b.uy + brep.vertices[c + 2] * b.uz;
-        var cy = brep.vertices[c] * b.vx + brep.vertices[c + 1] * b.vy + brep.vertices[c + 2] * b.vz;
-        sum += ax * cy - cx * ay;
-      }
-      total += sum / 2;
-    }
-    return total;
+  /** Any unit vector across the given one, for a placement's reference direction. */
+  function across(a) {
+    return unit(cross(a, Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
   }
 
   // ---------------------------------------------------------------------------
@@ -139,41 +123,32 @@
   function write(brep, options) {
     var o = options || {};
     var name = (o.name || 'part').replace(/\.(step|stp|stl|obj|3mf)$/i, '');
-    var vertexCount = brep.vertices.length / 3;
 
-    // --- the edges, each one shared by the two faces that meet along it ------
-    var edges = new Map();
-    var order = [];
+    // --- who meets whom -----------------------------------------------------
+    // The edges arrive already shared: one entry for the edge, whichever way
+    // round the two faces walk it. All that is wanted here is which two.
+    var edgeFaces = brep.edges.map(function () { return []; });
     brep.faces.forEach(function (face, f) {
       face.loops.forEach(function (loop) {
-        for (var i = 0; i < loop.length; i++) {
-          var a = loop[i], b = loop[(i + 1) % loop.length];
-          if (a === b) continue;
-          var key = a < b ? a * vertexCount + b : b * vertexCount + a;
-          var edge = edges.get(key);
-          if (!edge) {
-            edge = { a: a < b ? a : b, b: a < b ? b : a, faces: [] };
-            edges.set(key, edge);
-            order.push(edge);
-          }
-          if (edge.faces.indexOf(f) < 0) edge.faces.push(f);
-        }
+        loop.forEach(function (step) {
+          if (edgeFaces[step.edge].indexOf(f) < 0) edgeFaces[step.edge].push(f);
+        });
       });
     });
 
     var loose = 0;
-    edges.forEach(function (e) { if (e.faces.length !== 2) loose++; });
+    edgeFaces.forEach(function (on) { if (on.length !== 2) loose++; });
 
-    var parts = components(brep.faces, edges);
+    var parts = components(brep.faces, edgeFaces);
     var solids = [];
     var cavities = 0;
     var openShells = 0;
     parts.forEach(function (list) {
       var closed = true;
       var seen = new Set(list);
-      edges.forEach(function (e) {
-        if (!seen.has(e.faces[0])) return;
-        if (e.faces.length !== 2) closed = false;
+      edgeFaces.forEach(function (on) {
+        if (!on.length || !seen.has(on[0])) return;
+        if (on.length !== 2) closed = false;
       });
       var volume = closed ? volumeOf(brep, list) : 0;
       // A shell whose faces all point inwards is an enclosed cavity. It is a
@@ -246,10 +221,12 @@
     var angleUnit = put('(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))');
     var solidUnit = put('(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())');
     // What the file says about itself: how far apart two points have to be
-    // before they are two points. The rebuild puts every vertex on the corner
-    // its planes cross at, so this is the tolerance of the arithmetic, not of
-    // the part.
-    var tolerance = Math.min(1e-4, Math.max(1e-7, (brep.flatness || 0) * 4));
+    // before they are two points. On a body of flat faces this is the tolerance
+    // of the arithmetic rather than of the part, since every vertex is put
+    // exactly where its planes cross. A recognised cylinder is fitted rather
+    // than solved, so it carries its own small slack, and the file has to own
+    // up to whichever is larger.
+    var tolerance = Math.min(1e-4, Math.max(1e-7, Math.max(brep.flatness || 0, brep.slack || 0) * 4));
     var uncertainty = put('UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(' + num(tolerance) + '),#' +
       lengthUnit + ',' + text('distance_accuracy_value') + ',' + text('confusion accuracy') + ')');
     var geometry = put('(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#' +
@@ -260,45 +237,92 @@
     var world = put("AXIS2_PLACEMENT_3D(''," + '#' + origin + ',#' + direction(0, 0, 1) + ',#' + direction(1, 0, 0) + ')');
 
     // --- geometry -----------------------------------------------------------
-    order.forEach(function (edge) {
-      var a = edge.a * 3, b = edge.b * 3;
-      var dx = brep.vertices[b] - brep.vertices[a];
-      var dy = brep.vertices[b + 1] - brep.vertices[a + 1];
-      var dz = brep.vertices[b + 2] - brep.vertices[a + 2];
-      var len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      var va = vertexOf(edge.a), vb = vertexOf(edge.b);
-      var from = point(brep.vertices[a], brep.vertices[a + 1], brep.vertices[a + 2]);
-      var along = put("VECTOR(''," + '#' + direction(dx / len, dy / len, dz / len) + ',1.)');
-      var line = put("LINE(''," + '#' + from + ',#' + along + ')');
-      edge.id = put("EDGE_CURVE(''," + '#' + va + ',#' + vb + ',#' + line + ',.T.)');
+
+    /** A placement is a point, the way its z points, and where its x starts. */
+    function placement(at, axis, ref) {
+      var x = ref || across(axis);
+      return put("AXIS2_PLACEMENT_3D(''," + '#' + point(at[0], at[1], at[2]) +
+        ',#' + direction(axis[0], axis[1], axis[2]) + ',#' + direction(x[0], x[1], x[2]) + ')');
+    }
+
+    brep.edges.forEach(function (edge) {
+      var a = [brep.vertices[edge.a * 3], brep.vertices[edge.a * 3 + 1], brep.vertices[edge.a * 3 + 2]];
+      var b = [brep.vertices[edge.b * 3], brep.vertices[edge.b * 3 + 1], brep.vertices[edge.b * 3 + 2]];
+      var curve;
+      if (edge.curve.type === 'circle') {
+        var c = edge.curve;
+        // Which way the circle's axis points is which way the edge runs along
+        // it, and for a closed edge — a ring where one face meets another all
+        // the way round, starting and ending at the same corner — it is the
+        // only thing that says so.
+        curve = put("CIRCLE(''," + '#' + placement(c.centre, c.axis) + ',' + num(c.radius) + ')');
+      } else {
+        var d = unit([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
+        var along = put("VECTOR(''," + '#' + direction(d[0], d[1], d[2]) + ',1.)');
+        curve = put("LINE(''," + '#' + point(a[0], a[1], a[2]) + ',#' + along + ')');
+      }
+      edge.id = put("EDGE_CURVE(''," + '#' + vertexOf(edge.a) + ',#' + vertexOf(edge.b) +
+        ',#' + curve + ',.T.)');
     });
 
     var faceIds = new Array(brep.faces.length);
     brep.faces.forEach(function (face, f) {
+      var s = face.surface;
+
+      // A loop that goes all the way round a cylinder or a cone closes on the
+      // surface's own seam rather than on anything of its own, so there is no
+      // outer boundary to name — the face is the whole way round. A patch that
+      // does not has one like any other face.
+      var periodic = (s.type === 'cylinder' || s.type === 'cone' || s.type === 'sphere') &&
+        face.loops.length > 1;
+
       var bounds = [];
       face.loops.forEach(function (loop, index) {
-        var oriented = [];
-        for (var i = 0; i < loop.length; i++) {
-          var a = loop[i], b = loop[(i + 1) % loop.length];
-          if (a === b) continue;
-          var key = a < b ? a * vertexCount + b : b * vertexCount + a;
-          var edge = edges.get(key);
-          // The edge was written once, from its lower-numbered end. A loop
-          // running the other way down it says so rather than writing it twice.
-          oriented.push('#' + put("ORIENTED_EDGE('',*,*,#" + edge.id + ',' + (edge.a === a ? '.T.' : '.F.') + ')'));
-        }
+        var oriented = loop.map(function (step) {
+          var edge = brep.edges[step.edge];
+          return '#' + put("ORIENTED_EDGE('',*,*,#" + edge.id + ',' + (step.forward ? '.T.' : '.F.') + ')');
+        });
         var loopId = put("EDGE_LOOP(''," + '(' + oriented.join(',') + '))');
-        bounds.push('#' + put((index === 0 ? 'FACE_OUTER_BOUND' : 'FACE_BOUND') + "(''," + '#' + loopId + ',.T.)'));
+        var kind = (!periodic && index === 0) ? 'FACE_OUTER_BOUND' : 'FACE_BOUND';
+        bounds.push('#' + put(kind + "(''," + '#' + loopId + ',.T.)'));
       });
 
-      // The plane, placed at the point of it nearest the origin, with the
-      // face's own normal for its axis.
-      var at = point(face.x * face.d, face.y * face.d, face.z * face.d);
-      var b2 = basisOf(face);
-      var placement = put("AXIS2_PLACEMENT_3D(''," + '#' + at + ',#' + direction(face.x, face.y, face.z) +
-        ',#' + direction(b2.ux, b2.uy, b2.uz) + ')');
-      var plane = put("PLANE(''," + '#' + placement + ')');
-      faceIds[f] = put("ADVANCED_FACE(''," + '(' + bounds.join(',') + '),#' + plane + ',.T.)');
+      var surfaceId, sense = true;
+      if (s.type === 'cylinder') {
+        surfaceId = put("CYLINDRICAL_SURFACE(''," + '#' + placement(s.point, s.axis) + ',' + num(s.radius) + ')');
+        // The surface faces away from its axis. A shaft does too; a bore is the
+        // same surface with the material on the other side of it.
+        sense = s.outward;
+      } else if (s.type === 'sphere') {
+        surfaceId = put("SPHERICAL_SURFACE(''," + '#' + placement(s.centre, [0, 0, 1]) + ',' + num(s.radius) + ')');
+        sense = s.outward;
+      } else if (s.type === 'cone') {
+        // Placed where the cone has a radius worth quoting rather than at the
+        // apex, where it has none.
+        var reach = 0;
+        face.points.forEach(function (loop) {
+          loop.forEach(function (v) {
+            var t = (brep.vertices[v * 3] - s.apex[0]) * s.axis[0] +
+                    (brep.vertices[v * 3 + 1] - s.apex[1]) * s.axis[1] +
+                    (brep.vertices[v * 3 + 2] - s.apex[2]) * s.axis[2];
+            if (t > reach) reach = t;
+          });
+        });
+        var atRadius = Math.max(reach, 1e-3) * Math.tan(s.halfAngle);
+        var seat = [
+          s.apex[0] + s.axis[0] * Math.max(reach, 1e-3),
+          s.apex[1] + s.axis[1] * Math.max(reach, 1e-3),
+          s.apex[2] + s.axis[2] * Math.max(reach, 1e-3)
+        ];
+        surfaceId = put("CONICAL_SURFACE(''," + '#' + placement(seat, s.axis) + ',' +
+          num(atRadius) + ',' + num(s.halfAngle) + ')');
+        sense = s.outward;
+      } else {
+        surfaceId = put("PLANE(''," + '#' + placement([s.x * s.d, s.y * s.d, s.z * s.d], [s.x, s.y, s.z]) + ')');
+      }
+
+      faceIds[f] = put("ADVANCED_FACE(''," + '(' + bounds.join(',') + '),#' + surfaceId +
+        ',' + (sense ? '.T.' : '.F.') + ')');
     });
 
     var items = ['#' + world];
@@ -319,10 +343,16 @@
       "(''," + '(' + items.join(',') + '),#' + geometry + ')');
     put('SHAPE_DEFINITION_REPRESENTATION(#' + shape + ',#' + representation + ')');
 
+    var curves = { plane: 0, cylinder: 0, cone: 0, sphere: 0 };
+    brep.faces.forEach(function (f) { curves[f.surface.type]++; });
+    var circles = brep.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
+
     return {
       text: head.concat(lines).concat(['ENDSEC;', 'END-ISO-10303-21;', '']).join('\n'),
       faces: brep.faces.length,
-      edges: order.length,
+      surfaces: curves,
+      circles: circles,
+      edges: brep.edges.length,
       vertices: used.size,
       bodies: solids.length,
       cavities: cavities,

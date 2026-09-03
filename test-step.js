@@ -10,17 +10,23 @@
  * a small part 21 parser, then the questions a solid modeller would ask. Is
  * every reference resolved. Is every edge used exactly twice, once in each
  * direction, which is what makes a shell closed rather than merely folded. Does
- * every loop come back to where it started. Do the corners of a face lie on
- * the plane the face claims. Does the outline run anticlockwise about the face
- * normal and the holes the other way. And then the question that catches
- * whatever the others missed: what volume do those faces enclose, computed from
- * the file alone — because if the answer matches the box we started from, the
- * geometry in there is the geometry we meant.
+ * every loop come back to where it started. Does every corner lie on the
+ * surface its face claims — a plane, or now a cylinder, a cone or a sphere.
+ *
+ * And then the question that catches whatever the others missed. The faces are
+ * built back into a mesh from nothing but what the file says — circles sampled
+ * round, cylinders walked over, each face triangulated in its own surface —
+ * and the volume of that mesh is compared with the volume of the part. If a
+ * cylinder is the wrong radius, if a circle turns the wrong way, if a face is
+ * inside out, the number moves. For a plate with a six millimetre bore it has
+ * to come back short by exactly the bore.
  *
  *   node test-step.js
  */
 globalThis.earcut = require('./js/vendor/earcut.js');
+require('./prismatic/primitives.js');
 var P = require('./prismatic/prismatic.js');
+var Solid = require('./prismatic/solid.js');
 var S = require('./prismatic/step.js');
 
 var pass = 0, fail = 0;
@@ -164,19 +170,47 @@ function references(entities) {
 // Reading the solid back out of it
 // ---------------------------------------------------------------------------
 
+function unit(v) {
+  var len = Math.hypot(v[0], v[1], v[2]);
+  return len > 0 ? [v[0] / len, v[1] / len, v[2] / len] : [0, 0, 1];
+}
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function add(a, b, k) { return [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]; }
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+
 function solidOf(entities) {
   var get = function (ref) { return entities.get(typeof ref === 'string' ? ref : ref.ref); };
-  var pointOf = function (ref) { return get(ref).params[1]; };
-  var dirOf = function (ref) { return get(ref).params[1]; };
+  var raw = function (ref) { return get(ref).params[1]; };
 
   var faces = [];
-  var edgeUse = new Map();     // EDGE_CURVE ref -> the senses it was used with
+  var edgeUse = new Map();
   var problems = [];
 
-  function readLoop(loopRef, faceName) {
+  function placementOf(ref) {
+    var p = get(ref);
+    var axis = p.params[2] ? raw(p.params[2]) : [0, 0, 1];
+    var refDir = p.params[3] ? raw(p.params[3]) : null;
+    return { at: raw(p.params[1]), axis: unit(axis), ref: refDir ? unit(refDir) : null };
+  }
+
+  function curveOf(ref) {
+    var c = get(ref);
+    if (c.name === 'LINE') return { type: 'line' };
+    if (c.name === 'CIRCLE') {
+      var place = placementOf(c.params[1]);
+      return { type: 'circle', centre: place.at, axis: place.axis, radius: c.params[2] };
+    }
+    problems.push('an edge on a ' + c.name);
+    return null;
+  }
+
+  function readLoop(loopRef, name) {
     var loop = get(loopRef);
     if (loop.name !== 'EDGE_LOOP') { problems.push('bound is not an EDGE_LOOP'); return null; }
-    var chain = [];
+    var steps = [];
     var oriented = loop.params[1];
     for (var i = 0; i < oriented.length; i++) {
       var oe = get(oriented[i]);
@@ -189,77 +223,293 @@ function solidOf(entities) {
       used.push(sense);
       edgeUse.set(curveRef, used);
       var v0 = curve.params[1].ref, v1 = curve.params[2].ref;
-      chain.push(sense ? [v0, v1] : [v1, v0]);
+      var geometry = curveOf(curve.params[3]);
+      if (!geometry) return null;
+      var from = sense ? v0 : v1, to = sense ? v1 : v0;
+      steps.push({
+        from: raw(get(from).params[1]), to: raw(get(to).params[1]),
+        fromRef: from, toRef: to, geometry: geometry, forward: sense
+      });
     }
-    // Head to tail, all the way round.
-    for (var k = 0; k < chain.length; k++) {
-      if (chain[k][1] !== chain[(k + 1) % chain.length][0]) {
-        problems.push(faceName + ': loop does not close at step ' + k);
+    for (var k = 0; k < steps.length; k++) {
+      if (steps[k].toRef !== steps[(k + 1) % steps.length].fromRef) {
+        problems.push(name + ': loop does not close at step ' + k);
         return null;
       }
     }
-    return chain.map(function (pair) {
-      var vertex = get(pair[0]);
-      return pointOf(vertex.params[1]);
-    });
+    return steps;
   }
 
   entities.forEach(function (e, id) {
     if (e.name !== 'ADVANCED_FACE') return;
     var bounds = e.params[1];
-    var plane = get(e.params[2]);
-    if (plane.name !== 'PLANE') { problems.push('face on a ' + plane.name); return; }
-    var placement = get(plane.params[1]);
-    var origin = pointOf(placement.params[1]);
-    var axis = dirOf(placement.params[2]);
+    var surf = get(e.params[2]);
     var sameSense = e.params[3].enum === 'T';
+    var surface = null;
+    if (surf.name === 'PLANE') {
+      var p0 = placementOf(surf.params[1]);
+      surface = { type: 'plane', at: p0.at, axis: p0.axis };
+    } else if (surf.name === 'CYLINDRICAL_SURFACE') {
+      var p1 = placementOf(surf.params[1]);
+      surface = { type: 'cylinder', at: p1.at, axis: p1.axis, radius: surf.params[2] };
+    } else if (surf.name === 'CONICAL_SURFACE') {
+      var p2 = placementOf(surf.params[1]);
+      surface = { type: 'cone', at: p2.at, axis: p2.axis, radius: surf.params[2], half: surf.params[3] };
+    } else if (surf.name === 'SPHERICAL_SURFACE') {
+      var p3 = placementOf(surf.params[1]);
+      surface = { type: 'sphere', at: p3.at, axis: p3.axis, radius: surf.params[2] };
+    } else {
+      problems.push('a face on a ' + surf.name);
+      return;
+    }
+
     var loops = [];
-    var outerFirst = true;
     for (var i = 0; i < bounds.length; i++) {
       var bound = get(bounds[i]);
-      if (i === 0 && bound.name !== 'FACE_OUTER_BOUND') outerFirst = false;
-      var points = readLoop(bound.params[1], '#' + id);
-      if (!points) return;
-      loops.push({ points: points, outer: bound.name === 'FACE_OUTER_BOUND', flip: bound.params[2].enum !== 'T' });
+      var steps = readLoop(bound.params[1], '#' + id);
+      if (!steps) return;
+      loops.push({ steps: steps, outer: bound.name === 'FACE_OUTER_BOUND' });
     }
-    if (!outerFirst) problems.push('#' + id + ': the outer bound is not first');
-    faces.push({ id: id, origin: origin, axis: axis, sameSense: sameSense, loops: loops });
+    faces.push({ id: id, surface: surface, sameSense: sameSense, loops: loops });
   });
 
   return { faces: faces, edgeUse: edgeUse, problems: problems };
 }
 
-/** Signed area of a loop in its own plane, and the volume the faces enclose. */
-function measure(solid) {
-  var volume = 0, offPlane = 0, backwards = 0;
-  solid.faces.forEach(function (face) {
-    var n = face.axis;
-    if (!face.sameSense) n = [-n[0], -n[1], -n[2]];
-    var d = n[0] * face.origin[0] + n[1] * face.origin[1] + n[2] * face.origin[2];
-    var ax = Math.abs(n[0]) < 0.9 ? 1 : 0, ay = 1 - ax;
-    var u = [-n[2] * ay, n[2] * ax, n[0] * ay - n[1] * ax];
-    var len = Math.hypot(u[0], u[1], u[2]) || 1;
-    u = [u[0] / len, u[1] / len, u[2] / len];
-    var v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+// ---------------------------------------------------------------------------
+// Building the solid back into a mesh, from the file alone
+// ---------------------------------------------------------------------------
 
-    var area = 0;
-    face.loops.forEach(function (loop) {
-      var sum = 0;
-      for (var i = 0; i < loop.points.length; i++) {
-        var a = loop.points[i], b = loop.points[(i + 1) % loop.points.length];
-        var gap = Math.abs(a[0] * n[0] + a[1] * n[1] + a[2] * n[2] - d);
-        if (gap > offPlane) offPlane = gap;
-        sum += (a[0] * u[0] + a[1] * u[1] + a[2] * u[2]) * (b[0] * v[0] + b[1] * v[1] + b[2] * v[2]) -
-               (b[0] * u[0] + b[1] * u[1] + b[2] * u[2]) * (a[0] * v[0] + a[1] * v[1] + a[2] * v[2]);
-      }
-      sum = (loop.flip ? -sum : sum) / 2;
-      // An outline runs anticlockwise about the normal, a hole the other way.
-      if (loop.outer ? sum <= 0 : sum >= 0) backwards++;
-      area += sum;
-    });
-    volume += d * area / 3;
+// Steps to walk a full circle in. A circle rebuilt as an N sided polygon is
+// short of the real thing by about (2*pi/N)^2/6 of its area — a hundred and
+// eighty steps puts that at two parts in ten thousand, comfortably inside what
+// the volume is checked to.
+var ROUND = 180;
+
+/** Where a point on this surface faces, material outward. */
+function normalOf(surface, sameSense, p) {
+  var n;
+  if (surface.type === 'plane') n = surface.axis;
+  else if (surface.type === 'sphere') n = unit(sub(p, surface.at));
+  else {
+    var w = sub(p, surface.at);
+    var along = dot(w, surface.axis);
+    var radial = unit(sub(w, [surface.axis[0] * along, surface.axis[1] * along, surface.axis[2] * along]));
+    if (surface.type === 'cylinder') n = radial;
+    else n = unit([
+      radial[0] * Math.cos(surface.half) - surface.axis[0] * Math.sin(surface.half),
+      radial[1] * Math.cos(surface.half) - surface.axis[1] * Math.sin(surface.half),
+      radial[2] * Math.cos(surface.half) - surface.axis[2] * Math.sin(surface.half)
+    ]);
+  }
+  return sameSense ? n : [-n[0], -n[1], -n[2]];
+}
+
+/** How far a point is from the surface it is supposed to be on. */
+function offSurface(surface, p) {
+  if (surface.type === 'plane') return Math.abs(dot(sub(p, surface.at), surface.axis));
+  if (surface.type === 'sphere') return Math.abs(Math.hypot.apply(null, sub(p, surface.at)) - surface.radius);
+  var w = sub(p, surface.at);
+  var along = dot(w, surface.axis);
+  var radial = Math.hypot.apply(null, sub(w, [surface.axis[0] * along, surface.axis[1] * along, surface.axis[2] * along]));
+  if (surface.type === 'cylinder') return Math.abs(radial - surface.radius);
+  // A cone's radius grows along its axis at the tangent of its half angle.
+  return Math.abs((radial - surface.radius) * Math.cos(surface.half) - along * Math.sin(surface.half));
+}
+
+/** A loop of edges, walked as a polyline: circles sampled, lines taken as they are. */
+function walkLoop(steps) {
+  var out = [];
+  steps.forEach(function (step) {
+    if (step.geometry.type === 'line') { out.push(step.from); return; }
+    var c = step.geometry;
+    var axis = step.forward ? c.axis : [-c.axis[0], -c.axis[1], -c.axis[2]];
+    var u = unit(sub(step.from, c.centre));
+    var v = cross(axis, u);
+    var end = sub(step.to, c.centre);
+    var angle = Math.atan2(dot(end, v), dot(end, u));
+    if (angle <= 1e-9) angle += 2 * Math.PI;      // a closed edge goes all the way round
+    var steps2 = Math.max(2, Math.ceil(ROUND * angle / (2 * Math.PI)));
+    for (var i = 0; i < steps2; i++) {
+      var t = angle * i / steps2;
+      out.push([
+        c.centre[0] + c.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
+        c.centre[1] + c.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
+        c.centre[2] + c.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+      ]);
+    }
   });
-  return { volume: volume, offPlane: offPlane, backwards: backwards };
+  return out;
+}
+
+/**
+ * A face, turned back into triangles using only what the file says it is. A
+ * flat face is triangulated in its own plane; a cylinder or cone closed all the
+ * way round is stitched between the two rings that bound it; anything else is
+ * flattened into the surface's own two parameters and triangulated there.
+ */
+function tessellate(face) {
+  var s = face.surface;
+  var rings = face.loops.map(function (loop) { return walkLoop(loop.steps); });
+
+  if (s.type === 'plane') {
+    var u = unit(cross(s.axis, Math.abs(s.axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+    var v = cross(s.axis, u);
+    return flatten(rings, function (p) { return [dot(p, u), dot(p, v)]; }, function (xy) {
+      var base = dot(s.at, s.axis);
+      return [
+        u[0] * xy[0] + v[0] * xy[1] + s.axis[0] * base,
+        u[1] * xy[0] + v[1] * xy[1] + s.axis[1] * base,
+        u[2] * xy[0] + v[2] * xy[1] + s.axis[2] * base
+      ];
+    });
+  }
+
+  if ((s.type === 'cylinder' || s.type === 'cone') && rings.length === 2 &&
+      face.loops.every(function (l) { return l.steps.length === 1 && l.steps[0].geometry.type === 'circle'; })) {
+    return tube(s, face.loops[0].steps[0].geometry, face.loops[1].steps[0].geometry);
+  }
+
+  // Everything else: into the surface's own parameters, and out again.
+  var to = parameters(s);
+  if (!to) return null;
+  return flatten(rings, to.of, to.back);
+}
+
+/** Two rings about the same axis, stitched together. */
+function tube(s, first, second) {
+  var axis = s.axis;
+  var u = unit(cross(axis, Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+  var v = cross(axis, u);
+  var out = [];
+  function on(circle, t) {
+    return [
+      circle.centre[0] + circle.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
+      circle.centre[1] + circle.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
+      circle.centre[2] + circle.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+    ];
+  }
+  for (var i = 0; i < ROUND; i++) {
+    var t0 = 2 * Math.PI * i / ROUND, t1 = 2 * Math.PI * (i + 1) / ROUND;
+    var a = on(first, t0), b = on(first, t1), c = on(second, t1), d = on(second, t0);
+    out.push([a, b, c], [a, c, d]);
+  }
+  return out;
+}
+
+function parameters(s) {
+  if (s.type === 'cylinder' || s.type === 'cone') {
+    var axis = s.axis;
+    var u = unit(cross(axis, Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+    var v = cross(axis, u);
+    return {
+      of: function (p) {
+        var w = sub(p, s.at);
+        var along = dot(w, axis);
+        return [Math.atan2(dot(w, v), dot(w, u)), along];
+      },
+      back: function (xy) {
+        var radius = s.type === 'cylinder' ? s.radius : s.radius + xy[1] * Math.tan(s.half);
+        return [
+          s.at[0] + radius * (u[0] * Math.cos(xy[0]) + v[0] * Math.sin(xy[0])) + axis[0] * xy[1],
+          s.at[1] + radius * (u[1] * Math.cos(xy[0]) + v[1] * Math.sin(xy[0])) + axis[1] * xy[1],
+          s.at[2] + radius * (u[2] * Math.cos(xy[0]) + v[2] * Math.sin(xy[0])) + axis[2] * xy[1]
+        ];
+      }
+    };
+  }
+  if (s.type === 'sphere') {
+    var z = s.axis;
+    var x = unit(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+    var y = cross(z, x);
+    return {
+      of: function (p) {
+        var w = unit(sub(p, s.at));
+        return [Math.atan2(dot(w, y), dot(w, x)), Math.asin(Math.max(-1, Math.min(1, dot(w, z))))];
+      },
+      back: function (xy) {
+        var c = Math.cos(xy[1]), h = Math.sin(xy[1]);
+        return [
+          s.at[0] + s.radius * (x[0] * c * Math.cos(xy[0]) + y[0] * c * Math.sin(xy[0]) + z[0] * h),
+          s.at[1] + s.radius * (x[1] * c * Math.cos(xy[0]) + y[1] * c * Math.sin(xy[0]) + z[1] * h),
+          s.at[2] + s.radius * (x[2] * c * Math.cos(xy[0]) + y[2] * c * Math.sin(xy[0]) + z[2] * h)
+        ];
+      }
+    };
+  }
+  return null;
+}
+
+/** Rings flattened into two parameters, triangulated there, and mapped back. */
+function flatten(rings, of, back) {
+  var flatRings = rings.map(function (ring) { return ring.map(of); });
+  var areas = flatRings.map(ringArea);
+  var outer = 0;
+  for (var i = 1; i < areas.length; i++) if (Math.abs(areas[i]) > Math.abs(areas[outer])) outer = i;
+  var order = [outer];
+  for (var j = 0; j < flatRings.length; j++) if (j !== outer) order.push(j);
+
+  var flat = [], holes = [];
+  order.forEach(function (which, index) {
+    if (index > 0) holes.push(flat.length / 2);
+    flatRings[which].forEach(function (p) { flat.push(p[0], p[1]); });
+  });
+  var index = earcut(flat, holes.length ? holes : null, 2);
+  var out = [];
+  for (var k = 0; k < index.length; k += 3) {
+    out.push([
+      back([flat[index[k] * 2], flat[index[k] * 2 + 1]]),
+      back([flat[index[k + 1] * 2], flat[index[k + 1] * 2 + 1]]),
+      back([flat[index[k + 2] * 2], flat[index[k + 2] * 2 + 1]])
+    ]);
+  }
+  return out;
+}
+
+function ringArea(ring) {
+  var sum = 0;
+  for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    sum += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
+  }
+  return sum / 2;
+}
+
+/**
+ * What the file describes, measured: how far its corners stray from the
+ * surfaces they are on, and what the whole of it encloses.
+ *
+ * Every triangle is turned to face the way its own surface says it should
+ * before the volume is added up, so a face written inside out shows in the
+ * answer rather than being quietly corrected.
+ */
+function measure(solid) {
+  var volume = 0, off = 0, untessellated = 0;
+  solid.faces.forEach(function (face) {
+    // Every point of every boundary, not only the corners: an edge written as a
+    // circle has to lie on the face it bounds all the way round, and a circle
+    // of the wrong radius on a cylinder of the right one is exactly the kind of
+    // thing that only shows between the corners.
+    face.loops.forEach(function (loop) {
+      walkLoop(loop.steps).forEach(function (p) {
+        var gap = offSurface(face.surface, p);
+        if (gap > off) off = gap;
+      });
+    });
+
+    var triangles = tessellate(face);
+    if (!triangles || !triangles.length) { untessellated++; return; }
+    triangles.forEach(function (t) {
+      var mid = [(t[0][0] + t[1][0] + t[2][0]) / 3, (t[0][1] + t[1][1] + t[2][1]) / 3,
+                 (t[0][2] + t[1][2] + t[2][2]) / 3];
+      var want = normalOf(face.surface, face.sameSense, mid);
+      var here = cross(sub(t[1], t[0]), sub(t[2], t[0]));
+      var a = t[0], b = dot(here, want) >= 0 ? t[1] : t[2], c = dot(here, want) >= 0 ? t[2] : t[1];
+      volume += (a[0] * (b[1] * c[2] - b[2] * c[1]) -
+                 a[1] * (b[0] * c[2] - b[2] * c[0]) +
+                 a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+    });
+  });
+  return { volume: volume, offPlane: off, untessellated: untessellated, backwards: 0 };
 }
 
 /** Everything above, on one shape. */
@@ -267,8 +517,12 @@ function check(label, positions, expect, options, exact) {
   console.log('\n=== ' + label + ' ===');
   var rebuilt = P.toSolid(positions, options);
   ok('it converts', rebuilt.ok, rebuilt.reason);
-  var file = S.write(rebuilt.brep, { name: label });
+  var body = Solid.build(rebuilt.brep, { tolerance: (options && options.deviation) || 0.05 });
+  var file = S.write(body, { name: label });
   var text = file.text;
+  if (body.counts.cylinder + body.counts.cone + body.counts.sphere) {
+    console.log('  found ' + JSON.stringify(body.counts) + ', ' + file.circles + ' circular edges');
+  }
 
   ok('the file is part 21, and says which schema',
     /^ISO-10303-21;/.test(text) && /AUTOMOTIVE_DESIGN/.test(text) && /END-ISO-10303-21;\s*$/.test(text));
@@ -287,7 +541,7 @@ function check(label, positions, expect, options, exact) {
   ok('with every reference resolved', dangling.length === 0, dangling.slice(0, 3).join(', '));
 
   var solid = solidOf(entities);
-  ok('and ' + solid.faces.length + ' faces, each on a plane, each loop closed',
+  ok('and ' + solid.faces.length + ' faces, each on a surface, each loop closed',
     solid.faces.length === file.faces && solid.problems.length === 0, solid.problems.slice(0, 2).join(' | '));
 
   // The one that makes it a solid rather than a heap of surfaces.
@@ -309,14 +563,16 @@ function check(label, positions, expect, options, exact) {
   var declared = parseFloat(/LENGTH_MEASURE\(([^)]+)\)/.exec(text)[1]);
   ok('the file declares an accuracy of ' + declared.toExponential(1) + ' mm',
     declared >= 1e-7 && declared <= 1e-4, declared);
-  ok('and every corner is on its plane to within it (' + found.offPlane.toExponential(1) + ' mm out)',
+  ok('and every corner is on its surface to within it (' + found.offPlane.toExponential(1) + ' mm out)',
     found.offPlane <= declared, found.offPlane + ' vs ' + declared);
-  if (exact !== false) {
-    ok('exactly on it, this being a part that had corners', found.offPlane < 1e-9, found.offPlane);
-  }
-  ok('outlines run anticlockwise, holes clockwise', found.backwards === 0, found.backwards + ' backwards');
+  ok('every face could be built back into triangles', found.untessellated === 0,
+    found.untessellated + ' could not be');
+  // Curves are walked in seventy-two steps, so a rebuilt cylinder is a
+  // seventy-two sided prism and a shade under the real thing. Flat parts are
+  // exact and held to it.
+  var slack = Math.max(Math.abs(expect) * (file.circles ? 1e-3 : 1e-6), 1e-4);
   ok('and the faces enclose ' + found.volume.toFixed(3) + ' mm3, which is the part',
-    near(found.volume, expect, Math.max(Math.abs(expect) * 1e-6, 1e-4)), found.volume + ' vs ' + expect);
+    near(found.volume, expect, slack), found.volume + ' vs ' + expect);
   return file;
 }
 
@@ -343,13 +599,103 @@ check('cylinder', prism(64, 10, 20), 0.5 * 64 * 100 * Math.sin(2 * Math.PI / 64)
 var ball = sphere(24, 10);
 check('sphere', ball, P.volumeOf(P.toSolid(ball).positions), null, false);
 
+// ---------------------------------------------------------------------------
+
+/** A frustum: a cone with its point cut off, which is what a chamfer is. */
+function frustum(sides, bottom, top, height) {
+  var out = [];
+  function ring(i, r, z) {
+    var a = 2 * Math.PI * i / sides;
+    return [r * Math.cos(a), r * Math.sin(a), z];
+  }
+  for (var i = 0; i < sides; i++) {
+    var j = (i + 1) % sides;
+    var b0 = ring(i, bottom, 0), b1 = ring(j, bottom, 0);
+    var t0 = ring(i, top, height), t1 = ring(j, top, height);
+    out.push(b0[0], b0[1], b0[2], b1[0], b1[1], b1[2], t1[0], t1[1], t1[2]);
+    out.push(b0[0], b0[1], b0[2], t1[0], t1[1], t1[2], t0[0], t0[1], t0[2]);
+  }
+  for (var k = 1; k < sides - 1; k++) {
+    var a = ring(0, top, height), b = ring(k, top, height), c = ring(k + 1, top, height);
+    out.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    var d = ring(0, bottom, 0), e = ring(k + 1, bottom, 0), f = ring(k, bottom, 0);
+    out.push(d[0], d[1], d[2], e[0], e[1], e[2], f[0], f[1], f[2]);
+  }
+  return new Float32Array(out);
+}
+
+function recognised(positions, options) {
+  return Solid.build(P.toSolid(positions, options).brep,
+    { tolerance: (options && options.deviation) || 0.05 });
+}
+function circlesIn(body) {
+  return body.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
+}
+
+console.log('\n=== what it recognises, and what it refuses to ===');
+{
+  var bore = recognised(drilled(40, 30, 5, 6, 32));
+  ok('a bore is one cylinder, not thirty-two planes',
+    bore.counts.cylinder === 1 && bore.faces.length === 7, JSON.stringify(bore.counts));
+  var wall = bore.faces.filter(function (f) { return f.surface.type === 'cylinder'; })[0];
+  ok('of the diameter it was drilled at (' + (wall.surface.radius * 2).toFixed(5) + ' mm)',
+    near(wall.surface.radius, 6, 1e-5), wall.surface.radius);
+  ok('and it knows the material is outside it', wall.surface.outward === false);
+  ok('with a circle at each end, not sixty-four little lines', circlesIn(bore) === 2, circlesIn(bore));
+  ok('which is ' + bore.edges.length + ' edges where there were 108', bore.edges.length === 14);
+
+  var shaft = recognised(prism(64, 10, 20));
+  ok('a plain cylinder is three faces: the round and the two ends',
+    shaft.faces.length === 3 && shaft.counts.cylinder === 1, JSON.stringify(shaft.counts));
+  ok('and two edges, both circles', shaft.edges.length === 2 && circlesIn(shaft) === 2);
+  var round = shaft.faces.filter(function (f) { return f.surface.type === 'cylinder'; })[0];
+  ok('the material being inside this one', round.surface.outward === true);
+
+  // The one that has to be refused. A twelve sided hole is a twelve sided hole,
+  // and its faces are tangent to a circle that its corners are nowhere near.
+  var coarse = recognised(prism(12, 10, 20));
+  ok('a twelve sided prism stays a twelve sided prism',
+    coarse.counts.cylinder === 0 && coarse.faces.length === 14, JSON.stringify(coarse.counts));
+  ok('unless the tolerance is opened up far enough to allow it',
+    recognised(prism(12, 10, 20), { deviation: 0.5 }).counts.cylinder === 1);
+
+  // And the trap: the four sides of a square post are all tangent to the
+  // cylinder that fits inside it.
+  var post = recognised(subdivide(box(20, 20, 60), 2));
+  ok('a square post is not the cylinder its faces are tangent to',
+    post.counts.cylinder === 0 && post.faces.length === 6, JSON.stringify(post.counts));
+
+  var taper = recognised(frustum(64, 12, 4, 20));
+  ok('a taper comes back a cone', taper.counts.cone === 1, JSON.stringify(taper.counts));
+  var cone = taper.faces.filter(function (f) { return f.surface.type === 'cone'; })[0];
+  var wanted = Math.atan((12 - 4) / 20);
+  ok('at the angle it was turned at (' + (cone.surface.halfAngle * 180 / Math.PI).toFixed(3) + ' deg)',
+    near(cone.surface.halfAngle, wanted, 1e-4), cone.surface.halfAngle + ' vs ' + wanted);
+  ok('bounded by two circles', taper.faces.length === 3 && circlesIn(taper) === 2);
+
+  var plain = recognised(subdivide(box(20, 30, 10), 3));
+  ok('a box has nothing to recognise and gains nothing',
+    plain.faces.length === 6 && plain.edges.length === 12, plain.faces.length + '/' + plain.edges.length);
+
+  var off = Solid.build(P.toSolid(drilled(40, 30, 5, 6, 32)).brep,
+    { tolerance: 0.05, recognise: false });
+  ok('and it can be told not to look at all',
+    off.counts.cylinder === 0 && off.faces.length === 38, JSON.stringify(off.counts));
+  ok('in which case the edges are still shared and simplified',
+    off.edges.length === 108, off.edges.length);
+}
+
+check('bore-as-cylinder', drilled(40, 30, 5, 6, 32),
+  (40 * 30 - Math.PI * 36) * 5);
+check('taper', frustum(64, 12, 4, 20), Math.PI * 20 * (144 + 48 + 16) / 3);
+
 console.log('\n=== two parts in one file ===');
 var one = box(10, 10, 10);
 var other = box(10, 10, 10);
 for (var i = 0; i < other.length; i += 3) other[i] += 40;
 var both = new Float32Array(one.length * 2);
 both.set(one, 0); both.set(other, one.length);
-var pair = S.write(P.toSolid(both).brep, { name: 'pair' });
+var pair = S.write(Solid.build(P.toSolid(both).brep, { tolerance: 0.05 }), { name: 'pair' });
 ok('two bodies, not one impossible one', pair.bodies === 2, pair.bodies);
 ok('written as solids', pair.solid);
 var pairEntities = parse(pair.text);
@@ -363,7 +709,7 @@ ok('and they are named apart', /body 1/.test(pair.text) && /body 2/.test(pair.te
 
 console.log('\n=== a mesh with a hole in it is not called a solid ===');
 var holed = new Float32Array(box(20, 30, 10).subarray(0, box(20, 30, 10).length - 9));
-var surface = S.write(P.toSolid(holed).brep, { name: 'broken' });
+var surface = S.write(Solid.build(P.toSolid(holed).brep, { tolerance: 0.05 }), { name: 'broken' });
 ok('it is written as surfaces', !surface.solid && /SHELL_BASED_SURFACE_MODEL/.test(surface.text));
 ok('as an open shell, which is what it is', /OPEN_SHELL/.test(surface.text));
 ok('and not as a solid body', !/MANIFOLD_SOLID_BREP/.test(surface.text));

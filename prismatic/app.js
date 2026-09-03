@@ -22,6 +22,7 @@
     current: null,     // what is on screen: the source, or the rebuild
     look: null,        // the last inspection of `current`
     report: null,
+    body: null,
     saved: null,
     busy: false,
     pending: null
@@ -68,7 +69,8 @@
     return {
       angle: parseFloat(el('opt-angle').value) || 1.5,
       deviation: parseFloat(el('opt-deviation').value) || 0.05,
-      snapAxes: el('opt-square').checked
+      snapAxes: el('opt-square').checked,
+      recognise: el('opt-recognise').checked
     };
   }
 
@@ -180,16 +182,131 @@
         toast('Left alone. ' + report.reason, 'bad');
         return;
       }
+      var settings = tolerances();
+      try {
+        state.body = window.PrismaticSolid.build(report.brep, {
+          tolerance: settings.deviation,
+          recognise: settings.recognise
+        });
+      } catch (e) {
+        state.body = null;
+      }
       state.report = report;
       state.current = report.positions;
       hideToast();
-      look(function () {
+      look(function (found) {
         showReport(report);
+        // What is drawn now is the solid rather than the mesh: its own edges,
+        // so a recognised bore is two circles and nothing in between, and its
+        // own faces, so the bore is one colour. Which is the whole of what was
+        // gained, seen rather than counted.
+        if (state.body) {
+          var features = featuresOf(state.body, found.positions, settings.deviation);
+          if (features) state.viewer.setMesh(found.positions, features);
+          state.viewer.setEdges(solidEdges(state.body));
+        }
         if (typeof then === 'function') then();
       });
       toast('Rebuilt: ' + count(report.trianglesBefore) + ' triangles → ' + count(report.triangles) +
         ', across ' + count(report.faces) + ' faces.', 'good');
     }, 40);
+  }
+
+  /**
+   * Which face of the finished solid each triangle of the mesh belongs to, so
+   * that the picture says the same thing the panel does: a bore that was
+   * recognised as one cylinder is drawn as one colour rather than as the
+   * twenty-eight little planes it is still made of.
+   *
+   * Worked out from the geometry rather than carried along from the rebuild:
+   * a triangle belongs to the face whose surface it sits on and whose way of
+   * facing it agrees with. The converted mesh is small — that being the point
+   * of it — so asking every triangle about every face is nothing.
+   */
+  function featuresOf(body, positions, tolerance) {
+    if (!body || !body.faces.length || body.faces.length > 400) return null;
+    var P = window.PrismaticPrimitives;
+    var count = (positions.length / 9) | 0;
+    var out = new Int32Array(count);
+    var slack = Math.max(tolerance, 1e-6) * 2;
+    for (var t = 0; t < count; t++) {
+      var o = t * 9;
+      var mid = [
+        (positions[o] + positions[o + 3] + positions[o + 6]) / 3,
+        (positions[o + 1] + positions[o + 4] + positions[o + 7]) / 3,
+        (positions[o + 2] + positions[o + 5] + positions[o + 8]) / 3
+      ];
+      var ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1], uz = positions[o + 5] - positions[o + 2];
+      var wx = positions[o + 6] - positions[o], wy = positions[o + 7] - positions[o + 1], wz = positions[o + 8] - positions[o + 2];
+      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      var normal = [nx / len, ny / len, nz / len];
+
+      var best = -1, bestGap = Infinity;
+      for (var f = 0; f < body.faces.length; f++) {
+        var surface = body.faces[f].surface;
+        var gap = P.distance(surface, mid);
+        if (!(gap <= slack) || gap >= bestGap) continue;
+        var facing = P.normalAt(surface, mid);
+        if (!facing) continue;
+        if (normal[0] * facing[0] + normal[1] * facing[1] + normal[2] * facing[2] < 0.7) continue;
+        best = f; bestGap = gap;
+      }
+      out[t] = best >= 0 ? best : body.faces.length;
+    }
+    return out;
+  }
+
+  /** The body's edges as line segments, circles walked round. */
+  function solidEdges(body) {
+    var out = [];
+    var at = function (id) {
+      return [body.vertices[id * 3], body.vertices[id * 3 + 1], body.vertices[id * 3 + 2]];
+    };
+    body.edges.forEach(function (edge) {
+      if (edge.curve.type !== 'circle') {
+        var a = at(edge.a), b = at(edge.b);
+        out.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+        return;
+      }
+      var c = edge.curve;
+      var axis = c.axis;
+      var pick = Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      var u = normalise([axis[1] * pick[2] - axis[2] * pick[1],
+                         axis[2] * pick[0] - axis[0] * pick[2],
+                         axis[0] * pick[1] - axis[1] * pick[0]]);
+      var v = [axis[1] * u[2] - axis[2] * u[1], axis[2] * u[0] - axis[0] * u[2], axis[0] * u[1] - axis[1] * u[0]];
+      var start = at(edge.a), end = at(edge.b);
+      var from = angleOf(start, c, u, v);
+      var span = edge.closed ? 2 * Math.PI : sweep(from, angleOf(end, c, u, v));
+      var steps = Math.max(6, Math.ceil(72 * Math.abs(span) / (2 * Math.PI)));
+      var previous = null;
+      for (var i = 0; i <= steps; i++) {
+        var t = from + span * i / steps;
+        var p = [
+          c.centre[0] + c.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
+          c.centre[1] + c.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
+          c.centre[2] + c.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+        ];
+        if (previous) out.push(previous[0], previous[1], previous[2], p[0], p[1], p[2]);
+        previous = p;
+      }
+    });
+    return new Float32Array(out);
+  }
+  function normalise(v) {
+    var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1;
+    return [v[0] / len, v[1] / len, v[2] / len];
+  }
+  function angleOf(p, c, u, v) {
+    var w = [p[0] - c.centre[0], p[1] - c.centre[1], p[2] - c.centre[2]];
+    return Math.atan2(w[0] * v[0] + w[1] * v[1] + w[2] * v[2],
+                      w[0] * u[0] + w[1] * u[1] + w[2] * u[2]);
+  }
+  function sweep(from, to) {
+    var span = to - from;
+    while (span <= 1e-9) span += 2 * Math.PI;
+    return span;
   }
 
   function showReport(report) {
@@ -204,15 +321,33 @@
       ['Volume held to', (report.volumeError * 100).toFixed(3) + '%'],
       ['Furthest a vertex moved', mm(report.moved)],
       ['Corners off their planes', report.flatness < 1e-9 ? 'none' : mm(report.flatness)],
-      ['Watertight', report.watertight ? 'yes' : 'no']
+      ['Watertight', report.watertight ? 'yes' : 'no'],
+      state.body ? ['Solid faces', shapes(state.body.counts), true] : null,
+      state.body ? ['Solid edges', count(state.body.edges.length) + curves(state.body)] : null
     ]);
     el('report-block').hidden = false;
+  }
+
+  /** "6 planes and a cylinder", said the way a person would. */
+  function shapes(counts) {
+    var said = [];
+    [['plane', 'plane', 'planes'], ['cylinder', 'cylinder', 'cylinders'],
+     ['cone', 'cone', 'cones'], ['sphere', 'sphere', 'spheres']].forEach(function (kind) {
+      var n = counts[kind[0]];
+      if (n) said.push(count(n) + ' ' + (n === 1 ? kind[1] : kind[2]));
+    });
+    return said.length ? said.join(', ') : 'none';
+  }
+  function curves(body) {
+    var circles = body.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
+    return circles ? ', ' + count(circles) + ' of them circles' : '';
   }
 
   function reset() {
     if (!state.source) return;
     state.current = state.source;
     state.report = null;
+    state.body = null;
     state.saved = null;
     el('report-block').hidden = true;
     el('saved').innerHTML = '';
@@ -233,6 +368,7 @@
     state.source = positions;
     state.current = positions;
     state.report = null;
+    state.body = null;
     state.framed = false;
     el('report-block').hidden = true;
     el('saved').innerHTML = '';
@@ -324,11 +460,11 @@
    */
   function saveSTEP() {
     if (!state.current || state.busy) return;
-    if (!state.report) { convert(saveSTEP); return; }
+    if (!state.report || !state.body) { convert(saveSTEP); return; }
     var name = baseName() + '.step';
     var file;
     try {
-      file = window.PrismaticStep.write(state.report.brep, { name: baseName() });
+      file = window.PrismaticStep.write(state.body, { name: baseName() });
     } catch (e) {
       toast('The STEP file could not be written: ' + (e.message || e), 'bad');
       return;
@@ -342,7 +478,7 @@
         file.looseEdges + ' open edge' + (file.looseEdges === 1 ? '' : 's') +
         ', so there is no inside to it. Fusion will offer to stitch them.'), 'bad');
     } else {
-      toast(saidWhere(where, name, count(file.faces) + ' faces over ' + count(file.edges) +
+      toast(saidWhere(where, name, shapes(file.surfaces) + ' over ' + count(file.edges) +
         ' edges, as ' + (file.bodies === 1 ? 'one solid body' : count(file.bodies) + ' solid bodies') +
         '. Fusion opens it as a body you can edit.'), 'good');
     }
@@ -351,6 +487,7 @@
   function showSaved(file, name) {
     facts(el('saved'), [
       ['Written', name, true],
+      ['Made of', shapes(file.surfaces)],
       ['As', file.solid
         ? (file.bodies === 1 ? 'a solid body' : count(file.bodies) + ' solid bodies')
         : 'surfaces — the mesh is open'],
@@ -455,7 +592,7 @@
     el('btn-stl').onclick = saveSTL;
 
     var settle = null;
-    ['opt-angle', 'opt-deviation', 'opt-square'].forEach(function (id) {
+    ['opt-angle', 'opt-deviation', 'opt-square', 'opt-recognise'].forEach(function (id) {
       el(id).addEventListener('change', function () {
         // A tolerance that changes is a different answer, so the rebuild that
         // came out of the old one is no longer what is being described.

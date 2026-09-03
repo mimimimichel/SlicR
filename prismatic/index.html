@@ -80,6 +80,12 @@
           <span class="pr-num"><input id="opt-deviation" type="number" inputmode="decimal" min="0.001" max="2" step="0.01" value="0.05"><i>mm</i></span>
         </div>
         <div class="pr-field">
+          <label for="opt-recognise">Find cylinders and cones
+            <small>a ring of flat faces that is really a hole becomes one, with a circle at each end</small>
+          </label>
+          <span class="pr-switch"><input id="opt-recognise" type="checkbox" checked><i></i></span>
+        </div>
+        <div class="pr-field">
           <label for="opt-square">Square up to X/Y/Z
             <small>a face nearly on an axis is put exactly on it, so long as that stays inside the deviation</small>
           </label>
@@ -104,7 +110,8 @@
         <p class="pr-hint">
           <b>STEP</b> is the one to open in Fusion: it carries the faces, their
           edges and the solid they bound, so what arrives is a body you can
-          click a face of, fillet, sketch on and cut. <b>STL</b> is the mesh
+          click a face of, fillet, sketch on and cut — a recognised hole with a
+          diameter you can change, not thirty-two flats. <b>STL</b> is the mesh
           again, for printing. Saving STEP converts first if you have not.
         </p>
         <dl class="pr-facts" id="saved"></dl>
@@ -141,7 +148,9 @@
 <script src="../js/vendor/three.min.js"></script>
 <script src="../js/vendor/earcut.js"></script>
 <script src="../js/slicer/loaders.js"></script>
+<script src="primitives.js"></script>
 <script src="prismatic.js"></script>
+<script src="solid.js"></script>
 <script src="step.js"></script>
 <script src="android.js"></script>
 <script src="viewer.js"></script>

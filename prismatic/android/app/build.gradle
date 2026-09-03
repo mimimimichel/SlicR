@@ -26,6 +26,8 @@ tasks.register('bundleWebApp', Copy) {
         include 'prismatic/app.js'
         include 'prismatic/viewer.js'
         include 'prismatic/prismatic.js'
+        include 'prismatic/primitives.js'
+        include 'prismatic/solid.js'
         include 'prismatic/step.js'
         include 'prismatic/android.js'
         include 'styles/main.css'
@@ -36,7 +38,8 @@ tasks.register('bundleWebApp', Copy) {
 
     doLast {
         def www = webAppOut.get().dir("www")
-        ['prismatic/index.html', 'prismatic/prismatic.js', 'prismatic/step.js',
+        ['prismatic/index.html', 'prismatic/prismatic.js', 'prismatic/primitives.js',
+         'prismatic/solid.js', 'prismatic/step.js',
          'styles/main.css', 'js/vendor/three.min.js', 'js/slicer/loaders.js'].each { path ->
             if (!www.file(path).asFile.exists()) {
                 throw new GradleException(path + " was not bundled — check repoRoot")
@@ -53,8 +56,8 @@ android {
         applicationId "com.odpsstudio.prismatic"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
     }
 
     sourceSets {

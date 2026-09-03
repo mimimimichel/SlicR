@@ -118,6 +118,22 @@ flat faces are found and each fitted to one exact plane, every vertex is moved
 onto the corner where its planes cross, and each face is re-triangulated from
 its outline instead of keeping the fan of facets. In goes an STL, OBJ or 3MF.
 
+It does not stop at flat faces, because a part does not. A bore arrives as
+thirty-two little planes, and left at that it leaves as thirty-two little planes
+— faces nobody can fillet, a diameter nobody can change. So the faces are looked
+at again in groups: neighbours are added one at a time while a single cylinder,
+cone or sphere still passes through all of them, and a group that ends up with
+one becomes the single face that surface makes. The ring of thirty-two segments
+around the end of it becomes one circle the same way. A plate with a hole drilled
+through it goes from 38 faces and 108 edges to **7 faces and 14 edges**; a plain
+cylinder, from 66 faces to three and two edges, both of them circles.
+
+Nothing is taken on trust. Every fit is measured against every corner of the
+group *and the middle of every face in it*, and dropped if it is worse than the
+tolerance you set — which is what keeps a twelve-sided hole a twelve-sided hole,
+and keeps a square post from becoming the cylinder its four faces are, as it
+happens, all tangent to.
+
 Out comes **STEP**, which is the point of it. A mesh is a bag of triangles that
 every program opening it has to guess at; a STEP file says here is a point, here
 is the edge between two points, here is the plane, here is the face those edges
@@ -125,8 +141,8 @@ bound, and here is the closed shell they make. Fusion opens that as a solid
 body — faces you can click, fillet, sketch on and cut — so the part is editable
 again rather than merely printable. STL comes out too, for printing.
 
-Writing that file is not a second conversion: the faces, their planes and their
-loops all fall out of the rebuild already. What takes the care is that the edges
+Writing that file is not a second conversion: the faces, their surfaces and
+their loops all fall out of the rebuild and the recognition already. What takes the care is that the edges
 are *shared* — one edge between the two faces that meet along it, traversed the
 other way by the second — and that outlines run anticlockwise about the face
 normal while holes run the other way. Get either wrong and what arrives in
@@ -173,14 +189,17 @@ is named as one before you press anything.
 `test-step.js` reads the written file back knowing nothing about the code that
 wrote it — its own part 21 parser, then the questions a solid modeller asks. Is
 every reference resolved, is every edge used exactly twice and in opposite
-directions, does every loop close, do the corners of a face lie on the plane it
-claims, do the outlines turn the right way — and then the one that catches
-whatever the others missed: what volume do those faces enclose, computed from
-the file alone. For a 20 x 30 x 10 box it is 6000.000 mm3.
+directions, does every loop close, does every corner lie on the surface its face
+claims. And then the one that catches whatever the others missed: the faces are
+built back into a mesh from nothing but what the file says — circles sampled
+round, cylinders walked over, each face triangulated in its own surface — and
+that mesh is weighed. For a 20 x 30 x 10 box it comes to 6000.000 mm3, and for
+the plate with the six millimetre bore, short by exactly the bore.
 
-There is no B-rep kernel in a web page, so what comes out is still a mesh.
-Anything genuinely curved is faceted to the deviation you set, which is what
-the warning is about, and which tightening the deviation avoids.
+What is not there is a CAD kernel, and it shows in one place: a torus. Fillets
+and rounds are not recognised, so they come through as the bands of flat faces
+they arrived as. Cylinders, cones and spheres are; anything else curved is
+faceted to the deviation you set, which is what the warning is about.
 
 ## Android
 
@@ -216,7 +235,9 @@ js/slicer/
 js/vendor/            clipper, earcut, three.js
 prismatic/            the mesh-to-solid app, on its own
   prismatic.js        the faces found, fitted, and rebuilt
-  step.js             those faces written out as a STEP solid
+  primitives.js       fitting a cylinder, a cone or a sphere to a group of them
+  solid.js            those groups made into faces, and the edges they share
+  step.js             the whole of it written out as a STEP solid
   viewer.js           its viewport
   app.js              its UI
   android.js          the file bridge, when it is running inside the app

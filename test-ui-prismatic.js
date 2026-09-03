@@ -12,6 +12,7 @@
  *   node test-ui-prismatic.js
  */
 const { chromium } = require('playwright');
+globalThis.earcut = require('./js/vendor/earcut.js');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -44,6 +45,44 @@ function boxSTL() {
     out.push('endloop', 'endfacet');
   }
   out.push('endsolid box');
+  return out.join('\n');
+}
+
+/** A plate with a round hole drilled through it. */
+function drilledSTL(w, d, h, r, sides) {
+  const cx = w / 2, cy = d / 2;
+  const outer = [[0, 0], [w, 0], [w, d], [0, d]];
+  const hole = [];
+  for (let i = 0; i < sides; i++) {
+    const a = -2 * Math.PI * i / sides;
+    hole.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  const flat = [];
+  outer.concat(hole).forEach(p => flat.push(p[0], p[1]));
+  const index = earcut(flat, [outer.length], 2);
+  const out = ['solid plate'];
+  const face = (a, b, c) => {
+    out.push('facet normal 0 0 0', 'outer loop');
+    for (const v of [a, b, c]) out.push('vertex ' + v.map(n => n.toFixed(5)).join(' '));
+    out.push('endloop', 'endfacet');
+  };
+  for (let k = 0; k < index.length; k += 3) {
+    const a = index[k] * 2, b = index[k + 1] * 2, c = index[k + 2] * 2;
+    face([flat[a], flat[a + 1], h], [flat[b], flat[b + 1], h], [flat[c], flat[c + 1], h]);
+    face([flat[a], flat[a + 1], 0], [flat[c], flat[c + 1], 0], [flat[b], flat[b + 1], 0]);
+  }
+  const corners = [[0, 0, 0], [w, 0, 0], [w, d, 0], [0, d, 0],
+                   [0, 0, h], [w, 0, h], [w, d, h], [0, d, h]];
+  const quad = (p, a, b, c, e) => { face(p[a], p[b], p[c]); face(p[a], p[c], p[e]); };
+  quad(corners, 0, 1, 5, 4);
+  quad(corners, 1, 2, 6, 5);
+  quad(corners, 2, 3, 7, 6);
+  quad(corners, 3, 0, 4, 7);
+  for (let j = 0; j < sides; j++) {
+    const p0 = hole[j], p1 = hole[(j + 1) % sides];
+    quad([[p0[0], p0[1], 0], [p1[0], p1[1], 0], [p1[0], p1[1], h], [p0[0], p0[1], h]], 0, 1, 2, 3);
+  }
+  out.push('endsolid plate');
   return out.join('\n');
 }
 
@@ -196,6 +235,37 @@ function sphereSTL(seg = 24, r = 10) {
   ok('outlines the right way round', shape.backwards === 0, shape.backwards);
   ok('and the faces enclose the box that went in (' + shape.volume.toFixed(1) + ' mm3)',
     Math.abs(shape.volume - 6000) < 0.01, shape.volume);
+
+  console.log('\n=== 5b. a hole in the part comes out a hole in the solid ===');
+  const borePath = path.join(dir, 'bore.stl');
+  fs.writeFileSync(borePath, drilledSTL(40, 30, 5, 6, 32));
+  await page.setInputFiles('#file-input', borePath);
+  await settled();
+  await page.click('#btn-convert');
+  await settled();
+  const bore = await readList('report');
+  console.log('  ' + JSON.stringify(bore));
+  ok('the bore is one cylinder, not thirty-two flats',
+    bore['Solid faces'] === '6 planes, 1 cylinder', bore['Solid faces']);
+  ok('with a circle at each end', /2 of them circles/.test(bore['Solid edges'] || ''),
+    bore['Solid edges']);
+  const [boreStep] = await Promise.all([page.waitForEvent('download'), page.click('#btn-step')]);
+  const borePathOut = path.join(dir, boreStep.suggestedFilename());
+  await boreStep.saveAs(borePathOut);
+  const boreText = fs.readFileSync(borePathOut, 'utf8');
+  ok('and the file says cylinder where it used to say plane',
+    /CYLINDRICAL_SURFACE/.test(boreText) && (boreText.match(/CIRCLE\(/g) || []).length === 2,
+    (boreText.match(/CIRCLE\(/g) || []).length + ' circles');
+  const boreSolid = V.solidOf(V.parse(boreText));
+  const boreShape = V.measure(boreSolid);
+  ok('seven faces in all', boreSolid.faces.length === 7, boreSolid.faces.length);
+  ok('and the solid is still the plate, short by the bore (' + boreShape.volume.toFixed(1) + ' mm3)',
+    Math.abs(boreShape.volume - (40 * 30 - Math.PI * 36) * 5) < 6, boreShape.volume);
+  // Back to the box, so the sections after this one find what they expect.
+  await page.setInputFiles('#file-input', boxPath);
+  await settled();
+  await page.click('#btn-convert');
+  await settled();
 
   console.log('\n=== 6. going back goes back ===');
   await page.click('#btn-reset');
