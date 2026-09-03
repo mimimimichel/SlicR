@@ -40,8 +40,25 @@
     tolerance: 0         // mm; 0 means "whatever the conversion was told"
   };
 
+  var SAMPLE_CAP = 600;   // points enough to pin a surface down
+
   function fit(points, group, tolerance, corners) {
     return root.PrismaticPrimitives.fit(group, points, tolerance, corners);
+  }
+
+  /**
+   * Every nth of a long list. A surface fitted to six hundred points spread
+   * over a patch is the same surface as one fitted to thirty thousand, and
+   * doing it in full at every step of the growth is what turns a ball of nine
+   * thousand faces from a moment into a minute. The whole of it is measured
+   * once, at the end, where being exact is worth the pass.
+   */
+  function thin(list) {
+    if (list.length <= SAMPLE_CAP) return list;
+    var step = Math.ceil(list.length / SAMPLE_CAP);
+    var out = [];
+    for (var i = 0; i < list.length; i += step) out.push(list[i]);
+    return out;
   }
 
   // ---------------------------------------------------------------------------
@@ -204,14 +221,17 @@
       var points = [];
       var seats = [];
       var inGroup = new Set();
+      // Pushed rather than concatenated: a patch of nine thousand faces
+      // concatenated one at a time copies the whole list nine thousand times,
+      // which is most of a second spent on nothing.
       members.forEach(function (m) {
         group.add([faces[m].x, faces[m].y, faces[m].z], faces[m].d, weight[m], m);
-        points = points.concat(samples[m]);
-        seats = seats.concat(corners[m]);
+        Array.prototype.push.apply(points, samples[m]);
+        Array.prototype.push.apply(seats, corners[m]);
         inGroup.add(m);
       });
 
-      var surface = fit(points, group, tolerance, seats);
+      var surface = fit(thin(points), group, tolerance, thin(seats));
       if (!surface) continue;
 
       // Now that there is a surface, the faces just outside the patch can be
@@ -227,18 +247,23 @@
         var trial = group.copy();
         trial.add([faces[candidate].x, faces[candidate].y, faces[candidate].z],
           faces[candidate].d, weight[candidate], candidate);
-        var trialPoints = points.concat(samples[candidate]);
-        var trialSeats = seats.concat(corners[candidate]);
-        var grown = fit(trialPoints, trial, tolerance, trialSeats);
-        if (!grown) continue;
+        // Added to the lists in place and taken back off again if the surface
+        // will not have it, rather than copying both lists per candidate.
+        var wasPoints = points.length, wasSeats = seats.length;
+        Array.prototype.push.apply(points, samples[candidate]);
+        Array.prototype.push.apply(seats, corners[candidate]);
+        var grown = fit(thin(points), trial, tolerance, thin(seats));
+        if (!grown) { points.length = wasPoints; seats.length = wasSeats; continue; }
         // Touching the surface is not lying along it. Without this a cylinder
         // swallows the cap on the end of it, every corner of which is on the
         // cylinder because the rim is where the two meet.
         if (!P.tangent(grown, [faces[candidate].x, faces[candidate].y, faces[candidate].z],
-              samples[candidate], cosTangent)) continue;
+              samples[candidate], cosTangent)) {
+          points.length = wasPoints;
+          seats.length = wasSeats;
+          continue;
+        }
         group = trial;
-        points = trialPoints;
-        seats = trialSeats;
         surface = grown;
         members.push(candidate);
         inGroup.add(candidate);
@@ -246,6 +271,12 @@
           if (!inGroup.has(n) && taken[n] < 0) frontier.push(n);
         });
       }
+
+      // Everything, now, and exactly: a group that grew a face at a time can
+      // drift away from where it started, and the thinned fits above were only
+      // ever good enough to decide with.
+      surface = fit(points, group, tolerance, seats);
+      if (!surface) continue;
 
       var along = true;
       for (var c = 0; c < members.length && along; c++) {
@@ -255,10 +286,107 @@
       if (!along) continue;
 
       for (var m2 = 0; m2 < members.length; m2++) taken[members[m2]] = groups.length;
-      groups.push({ surface: surface, members: members.slice() });
+      groups.push({
+        surface: surface, members: members.slice(),
+        group: group, points: points, seats: seats
+      });
     }
 
+    coalesce(groups, taken, neighbours, tolerance);
     return { groups: groups, taken: taken };
+  }
+
+  /**
+   * Two halves of one sphere, put back together.
+   *
+   * A surface is grown from a patch outwards and stops where the fit stops
+   * holding. On a mesh whose facets sit right at the edge of the tolerance that
+   * can happen halfway round a ball: the first group takes what it can, the
+   * rest starts again on its own, and what should have been one sphere comes
+   * out in four pieces — which is worse than not recognising it at all, because
+   * four spheres of slightly different radius is not a thing anyone drew.
+   *
+   * So neighbouring groups are offered to each other. The accumulated moments
+   * of two groups add, so the joint fit costs nothing to try, and it is only
+   * accepted if the one surface holds over everything both of them had.
+   */
+  function coalesce(groups, taken, neighbours, tolerance) {
+    var P = root.PrismaticPrimitives;
+    var merged = true;
+    var rounds = 0;
+    while (merged && rounds++ < 8) {
+      merged = false;
+      var touching = new Map();
+      for (var f = 0; f < taken.length; f++) {
+        var mine = taken[f];
+        if (mine < 0) continue;
+        for (var k = 0; k < neighbours[f].length; k++) {
+          var theirs = taken[neighbours[f][k]];
+          if (theirs < 0 || theirs === mine) continue;
+          var key = mine < theirs ? mine + ':' + theirs : theirs + ':' + mine;
+          touching.set(key, [Math.min(mine, theirs), Math.max(mine, theirs)]);
+        }
+      }
+
+      var pairs = [];
+      touching.forEach(function (pair) { pairs.push(pair); });
+      // Biggest first, so a large surface gathers the scraps rather than a
+      // scrap deciding what the large one is.
+      pairs.sort(function (a, b) {
+        return (groups[b[0]].members.length + groups[b[1]].members.length) -
+               (groups[a[0]].members.length + groups[a[1]].members.length);
+      });
+
+      for (var p = 0; p < pairs.length && !merged; p++) {
+        var a = groups[pairs[p][0]], b = groups[pairs[p][1]];
+        if (!a || !b || a === b) continue;
+        var joint = a.group.copy();
+        joint.weight += b.group.weight;
+        joint.sd += b.group.sd;
+        for (var i = 0; i < 3; i++) {
+          joint.sn[i] += b.group.sn[i];
+          joint.dn[i] += b.group.dn[i];
+          for (var j = 0; j < 3; j++) joint.nn[i * 3 + j] += b.group.nn[i * 3 + j];
+        }
+        for (var x = 0; x < 16; x++) joint.m4[x] += b.group.m4[x];
+        for (var y = 0; y < 4; y++) joint.b4[y] += b.group.b4[y];
+
+        var points = a.points.concat(b.points);
+        var seats = a.seats.concat(b.seats);
+        if (points.length > 200000) continue;      // past this the pair is not worth the pass
+        var surface = P.fit(joint, thin(points), tolerance, thin(seats));
+        if (!surface) continue;
+        surface = P.fit(joint, points, tolerance, seats);      // thinned to decide, whole to accept
+        if (!surface) continue;
+
+        var members = a.members.concat(b.members);
+
+        a.surface = surface;
+        a.members = members;
+        a.group = joint;
+        a.points = points;
+        a.seats = seats;
+        var index = groups.indexOf(a);
+        for (var t = 0; t < taken.length; t++) if (taken[t] === pairs[p][1]) taken[t] = index;
+        groups[pairs[p][1]] = null;
+        merged = true;
+      }
+
+      if (merged) {
+        // Close the gaps the removals left, and point everyone at where their
+        // group ended up.
+        var kept = [];
+        var moved = new Int32Array(groups.length).fill(-1);
+        for (var g = 0; g < groups.length; g++) {
+          if (!groups[g]) continue;
+          moved[g] = kept.length;
+          kept.push(groups[g]);
+        }
+        for (var v = 0; v < taken.length; v++) if (taken[v] >= 0) taken[v] = moved[taken[v]];
+        groups.length = 0;
+        Array.prototype.push.apply(groups, kept);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -509,12 +637,47 @@
       ? recognise(brep, o)
       : { groups: [], taken: new Int32Array(brep.faces.length).fill(-1) };
 
+    var vertices = brep.vertices;
+    var seams = [];
+
     found.groups.forEach(function (group) {
       var loops = outlineOf(brep, brep.faces, group.members);
-      // A surface with no boundary at all — a whole sphere — has nowhere to
-      // hang a loop, and a face in STEP must have one. It keeps its planes.
+
+      // A surface with no boundary at all. A whole ball is the case: nothing
+      // bounds it, and a face has to be bounded by something.
+      //
+      // The way round it is the way a modeller does it — cut the ball in half
+      // and let the two halves share the cut. One new point on the equator, one
+      // circular edge through it, and two faces: the one whose loop runs
+      // anticlockwise about the axis is the top half, the one that runs the
+      // other way is the bottom. Nothing else in the body has to know.
       if (!loops) {
-        group.members.forEach(function (f) { found.taken[f] = -1; });
+        if (group.surface.type !== 'sphere') {
+          group.members.forEach(function (f) { found.taken[f] = -1; });
+          return;
+        }
+        counts.sphere++;
+        var enclosedBall = 0;
+        group.members.forEach(function (f) {
+          enclosedBall += brep.faces[f].d * planeArea(brep, brep.faces[f]) / 3;
+        });
+        if (vertices === brep.vertices) vertices = Array.prototype.slice.call(brep.vertices);
+        var axis = [0, 0, 1];
+        var start = [
+          group.surface.centre[0] + group.surface.radius,
+          group.surface.centre[1],
+          group.surface.centre[2]
+        ];
+        var at = vertices.length / 3;
+        vertices.push(start[0], start[1], start[2]);
+        seams.push({
+          vertex: at,
+          circle: { centre: group.surface.centre.slice(), axis: axis, radius: group.surface.radius },
+          north: faces.length,
+          south: faces.length + 1
+        });
+        faces.push({ surface: group.surface, loops: null, from: group.members.length, volume: enclosedBall });
+        faces.push({ surface: group.surface, loops: null, from: 0, volume: 0 });
         return;
       }
       counts[group.surface.type]++;
@@ -540,9 +703,35 @@
       });
     });
 
-    var built = buildEdges(brep.vertices, faces, o.tolerance);
+    var coordinates = vertices === brep.vertices ? brep.vertices : Float64Array.from(vertices);
+    var bounded = faces.filter(function (f) { return f.loops; });
+    var built = buildEdges(coordinates, bounded, o.tolerance);
+
+    // The seams are not edges of the mesh, so they are added rather than found.
+    seams.forEach(function (seam) {
+      var index = built.edges.length;
+      built.edges.push({
+        a: seam.vertex, b: seam.vertex, via: [],
+        curve: { type: 'circle', centre: seam.circle.centre, axis: seam.circle.axis, radius: seam.circle.radius },
+        closed: true
+      });
+      faces[seam.north].loops = [[{ edge: index, forward: true }]];
+      faces[seam.south].loops = [[{ edge: index, forward: false }]];
+      faces[seam.north].points = [[seam.vertex]];
+      faces[seam.south].points = [[seam.vertex]];
+      faces[seam.north].seam = true;
+      faces[seam.south].seam = true;
+    });
+
     var out = [];
     for (var i = 0; i < faces.length; i++) {
+      if (faces[i].seam) {
+        out.push({
+          surface: faces[i].surface, loops: faces[i].loops, points: faces[i].points,
+          from: faces[i].from, volume: faces[i].volume
+        });
+        continue;
+      }
       var loops = [];
       var lost = false;
       for (var l = 0; l < faces[i].loops.length; l++) {
@@ -558,7 +747,7 @@
     }
 
     return {
-      vertices: brep.vertices,
+      vertices: coordinates,
       edges: built.edges,
       faces: out,
       flatness: brep.flatness,
@@ -566,7 +755,7 @@
       // corner sits off the surface of its own face, or off the curve of its
       // own edge. A file has to declare an accuracy and then be that accurate,
       // and a fitted cylinder is not exact the way a fitted plane is.
-      slack: slackOf({ vertices: brep.vertices, edges: built.edges, faces: out }),
+      slack: slackOf({ vertices: coordinates, edges: built.edges, faces: out }),
       counts: counts
     };
   }

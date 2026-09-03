@@ -65,6 +65,87 @@
   }
   function hideToast() { clearTimeout(toastTimer); el('toast').hidden = true; }
 
+  // ---------------------------------------------------------------------------
+  // The gauge
+  // ---------------------------------------------------------------------------
+
+  /**
+   * One control for the two tolerances, because two numbers in millimetres and
+   * degrees are not what somebody wants to think about. Pushed up, more of the
+   * mesh collapses into fewer faces and the surface is allowed to move further
+   * to do it.
+   *
+   * What it means is relative to the part: a twentieth of a millimetre is a lot
+   * on a five millimetre bead and nothing on a three hundred millimetre bracket,
+   * so the gauge runs from two thousandths of a percent of the part's own size
+   * to two percent of it, along a scale where every step is the same
+   * proportional step rather than the same number of millimetres.
+   */
+  var LOOSEST = -1.7;    // log10 of the deviation as a fraction of the part: 2%
+  var TIGHTEST = -4.7;   // and at the other end, two thousandths of a percent
+
+  function gaugeToTolerances(gauge, size) {
+    var t = Math.max(0, Math.min(1, gauge / 100));
+    var scale = size > 0 ? size : 100;
+    return {
+      deviation: scale * Math.pow(10, TIGHTEST + (LOOSEST - TIGHTEST) * t),
+      // The angle opens with it, from a fifth of a degree to ten: it is the
+      // same question asked of the facets rather than of the corners.
+      angle: Math.pow(10, Math.log(0.2) / Math.LN10 +
+        (Math.log(10) / Math.LN10 - Math.log(0.2) / Math.LN10) * t)
+    };
+  }
+
+  /** And back again, so a hand-typed tolerance moves the gauge to match. */
+  function tolerancesToGauge(deviation, size) {
+    var scale = size > 0 ? size : 100;
+    var t = (Math.log(deviation / scale) / Math.LN10 - TIGHTEST) / (LOOSEST - TIGHTEST);
+    return Math.max(0, Math.min(100, Math.round(t * 100)));
+  }
+
+  /** How big the part is, corner to corner. Measured, not asked of the viewer. */
+  function modelSize() {
+    var p = state.source;
+    if (!p || !p.length) return 100;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < p.length; i += 3) {
+      for (var k = 0; k < 3; k++) {
+        if (p[i + k] < lo[k]) lo[k] = p[i + k];
+        if (p[i + k] > hi[k]) hi[k] = p[i + k];
+      }
+    }
+    var x = hi[0] - lo[0], y = hi[1] - lo[1], z = hi[2] - lo[2];
+    var span = Math.sqrt(x * x + y * y + z * z);
+    return span > 0 ? span : 100;
+  }
+
+  function roundish(mm) {
+    if (mm >= 1) return mm.toFixed(2);
+    if (mm >= 0.1) return mm.toFixed(3);
+    return mm.toFixed(4);
+  }
+
+  /** Move the two fields to wherever the gauge is, and say what that means. */
+  function applyGauge(rerun) {
+    var found = gaugeToTolerances(parseFloat(el('opt-simplify').value), modelSize());
+    el('opt-deviation').value = roundish(found.deviation);
+    el('opt-angle').value = found.angle.toFixed(found.angle < 1 ? 2 : 1);
+    showReading();
+    if (rerun) { state.done = null; look(); }
+  }
+
+  /**
+   * What the gauge is set to, and — when there is one that matches it — what
+   * came of it. Mid-drag there is only the setting: the count beside it would
+   * be the last answer sitting next to the new question, which reads as though
+   * nothing changed.
+   */
+  function showReading(tail) {
+    var t = tolerances();
+    el('simplify-reading').innerHTML = '<b>' + roundish(t.deviation) + ' mm</b> · ' +
+      t.angle.toFixed(t.angle < 1 ? 2 : 1) + '°' + (tail ? ' · ' + tail : '');
+  }
+
   function tolerances() {
     return {
       angle: parseFloat(el('opt-angle').value) || 1.5,
@@ -98,6 +179,8 @@
         return;
       }
       state.look = found;
+      showReading(state.body ? null : '<b>' + count(found.faces) + '</b> flat face' +
+        (found.faces === 1 ? '' : 's'));
       state.viewer.setMesh(found.positions, found.face);
       state.viewer.setEdges(found.edges);
       if (!state.framed) { state.viewer.frame(); state.framed = true; }
@@ -201,6 +284,7 @@
         // own faces, so the bore is one colour. Which is the whole of what was
         // gained, seen rather than counted.
         if (state.body) {
+          showSolidReading();
           var features = featuresOf(state.body, found.positions, settings.deviation);
           if (features) state.viewer.setMesh(found.positions, features);
           state.viewer.setEdges(solidEdges(state.body));
@@ -328,6 +412,12 @@
     el('report-block').hidden = false;
   }
 
+  /** Once there is a solid, the gauge says what it actually came to. */
+  function showSolidReading() {
+    if (!state.body) return;
+    showReading('<b>' + shapes(state.body.counts) + '</b>');
+  }
+
   /** "6 planes and a cylinder", said the way a person would. */
   function shapes(counts) {
     var said = [];
@@ -374,6 +464,10 @@
     el('saved').innerHTML = '';
     el('empty').hidden = true;
     el('file-name').textContent = name;
+    // The gauge is a proportion of the part, so what it means moves with the
+    // part. Settled before looking, not after, or the first answer is the one
+    // the last part's tolerances gave.
+    applyGauge(false);
     look();
   }
 
@@ -592,14 +686,30 @@
     el('btn-stl').onclick = saveSTL;
 
     var settle = null;
+    function changed() {
+      // A tolerance that changes is a different answer, so the rebuild that
+      // came out of the old one is no longer what is being described.
+      if (state.report) reset();
+      clearTimeout(settle);
+      settle = setTimeout(function () { look(); }, 120);
+    }
     ['opt-angle', 'opt-deviation', 'opt-square', 'opt-recognise'].forEach(function (id) {
       el(id).addEventListener('change', function () {
-        // A tolerance that changes is a different answer, so the rebuild that
-        // came out of the old one is no longer what is being described.
-        if (state.report) reset();
-        clearTimeout(settle);
-        settle = setTimeout(function () { look(); }, 120);
+        if (id === 'opt-deviation') {
+          el('opt-simplify').value = tolerancesToGauge(parseFloat(el('opt-deviation').value), modelSize());
+        }
+        changed();
       });
+    });
+
+    // Dragging only moves the numbers; letting go rebuilds. So a drag across
+    // the whole gauge is one answer rather than a hundred, and the answer is
+    // the model itself rather than a description of it — the point of a gauge
+    // being that you can see what it did.
+    el('opt-simplify').addEventListener('input', function () { applyGauge(false); });
+    el('opt-simplify').addEventListener('change', function () {
+      applyGauge(false);
+      if (state.source) convert();
     });
 
     el('opt-shade').onchange = function () { state.viewer.setShadeByFace(el('opt-shade').checked); };

@@ -144,6 +144,52 @@ body {
 .pr-switch input:checked + i::after { transform: translateX(18px); background: var(--primary-hover); }
 .pr-switch input:focus-visible + i { outline: 2px solid var(--primary-hover); outline-offset: 2px; }
 
+/* ---- The simplification gauge ---------------------------------------- */
+
+.pr-slider { padding: 4px 0 2px; }
+.pr-slider input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 30px; background: transparent; cursor: pointer; margin: 0;
+}
+.pr-slider input[type=range]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--info), var(--primary), var(--warning));
+}
+.pr-slider input[type=range]::-moz-range-track {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--info), var(--primary), var(--warning));
+}
+.pr-slider input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 22px; height: 22px; margin-top: -8px; border-radius: 50%;
+  background: var(--text); border: 3px solid var(--bg-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .5);
+}
+.pr-slider input[type=range]::-moz-range-thumb {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--text); border: 3px solid var(--bg-elevated);
+}
+.pr-slider input[type=range]:focus-visible { outline: 2px solid var(--primary-hover); outline-offset: 4px; }
+.pr-scale {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--text-dim); margin-top: -2px;
+}
+.pr-reading {
+  margin-top: 8px; font-size: 13px; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); text-align: center;
+}
+.pr-reading b { color: var(--text); font-weight: 600; }
+
+.pr-exact { margin-top: 6px; }
+.pr-exact summary {
+  font-size: 11.5px; color: var(--text-dim); cursor: pointer;
+  padding: 6px 0; list-style: none;
+}
+.pr-exact summary::-webkit-details-marker { display: none; }
+.pr-exact summary::before { content: '▸ '; }
+.pr-exact[open] summary::before { content: '▾ '; }
+.pr-exact summary:hover { color: var(--text-secondary); }
+
 .pr-row { display: flex; gap: 8px; margin-top: 12px; }
 .pr-row .pr-btn { flex: 1 1 auto; }
 

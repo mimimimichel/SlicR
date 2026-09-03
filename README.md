@@ -128,11 +128,29 @@ around the end of it becomes one circle the same way. A plate with a hole drille
 through it goes from 38 faces and 108 edges to **7 faces and 14 edges**; a plain
 cylinder, from 66 faces to three and two edges, both of them circles.
 
+A ball is the awkward one, because nothing bounds it and a face has to be
+bounded by something. It gets cut in half the way a modeller would: one point
+on the equator, one circular edge through it, and two faces that share it.
+
 Nothing is taken on trust. Every fit is measured against every corner of the
 group *and the middle of every face in it*, and dropped if it is worse than the
 tolerance you set — which is what keeps a twelve-sided hole a twelve-sided hole,
 and keeps a square post from becoming the cylinder its four faces are, as it
 happens, all tangent to.
+
+**The gauge** is what you actually touch. One slider from *faithful* to
+*simple*, reading out in millimetres and degrees and in what it came to — "0.14
+mm · 3.1° · 8 planes, 1 cylinder" — and rebuilding when you let go, so the
+simplification is something you watch rather than something you are told about.
+What it means is a proportion of the part, so the same setting is sensible on a
+five-millimetre bead and on a three-hundred-millimetre bracket.
+
+It matters more than it sounds. A tolerance tighter than a mesh's own facets
+means nothing can be recognised — a ball tessellated in 32 segments is 0.08 mm
+away from being a ball, so at 0.05 mm it stays 976 planes, and at the edge of
+the tolerance it comes apart into pieces of ball, which is worse. The honest
+framing is the one on the slider: a coarsely tessellated ball is itself a poor
+copy of a ball, so simplifying it usually lands *closer* to what was drawn.
 
 Out comes **STEP**, which is the point of it. A mesh is a bag of triangles that
 every program opening it has to guess at; a STEP file says here is a point, here

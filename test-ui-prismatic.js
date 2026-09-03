@@ -281,6 +281,8 @@ function sphereSTL(seg = 24, r = 10) {
   // come back seven per cent smaller than it went in.
   await page.setInputFiles('#file-input', ballPath);
   await settled();
+  // The numbers live behind a fold now; the gauge is the front door.
+  await page.evaluate(() => { document.querySelector('.pr-exact').open = true; });
   await page.fill('#opt-deviation', '4');
   await page.fill('#opt-angle', '30');
   await page.locator('#opt-angle').blur();
@@ -296,6 +298,50 @@ function sphereSTL(seg = 24, r = 10) {
   ok('and the mesh on screen is the one that went in',
     untouched.Triangles === roundTriangles && await page.locator('#report-block').isHidden(),
     untouched.Triangles + ' of ' + roundTriangles);
+
+  console.log('\n=== 7b. the gauge is one control for the two of them ===');
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.click('[data-demo]');
+  await settled();
+  const reading = () => page.locator('#simplify-reading').textContent();
+  const gauge = async (value) => {
+    await page.evaluate((v) => {
+      const s = document.getElementById('opt-simplify');
+      s.value = String(v);
+      s.dispatchEvent(new Event('input', { bubbles: true }));
+      s.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
+    await settled();
+    await page.waitForTimeout(120);
+    return (await reading()).trim();
+  };
+  const tight = await gauge(10);
+  const loose = await gauge(80);
+  console.log('  tight: ' + tight);
+  console.log('  loose: ' + loose);
+  ok('it reads in millimetres and degrees, not in gauge units',
+    /mm · [\d.]+°/.test(tight), tight);
+  const mm = t => parseFloat(t);
+  ok('pushing it lets the surface move further (' + mm(tight) + ' → ' + mm(loose) + ' mm)',
+    mm(loose) > mm(tight) * 10, mm(tight) + ' → ' + mm(loose));
+  ok('and what it did is on the model, not just described: ' + loose,
+    /cylinder/.test(loose) && !/cylinder/.test(tight), tight + ' | ' + loose);
+  // What it means depends on the part: the same setting is a different number
+  // of millimetres on a bigger one.
+  await page.setInputFiles('#file-input', boxPath);
+  await settled();
+  const onBox = (await reading()).trim();
+  ok('and it means something different on a different part (' + mm(onBox) + ' mm)',
+    Math.abs(mm(onBox) - mm(loose)) > 1e-4, onBox);
+  const byHand = await page.evaluate(() => {
+    document.querySelector('.pr-exact').open = true;
+    const d = document.getElementById('opt-deviation');
+    d.value = '0.5';
+    d.dispatchEvent(new Event('change', { bubbles: true }));
+    return document.getElementById('opt-simplify').value;
+  });
+  ok('typing a tolerance moves the gauge to match it', parseInt(byHand, 10) > 60, byHand);
 
   console.log('\n=== 8. a scan is called a scan ===');
   await page.reload();

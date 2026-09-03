@@ -66,19 +66,35 @@
       </section>
 
       <section class="pr-block">
-        <h2>Tolerances</h2>
-        <div class="pr-field">
-          <label for="opt-angle">Face angle
-            <small>how far a facet may lean before it is a face of its own</small>
-          </label>
-          <span class="pr-num"><input id="opt-angle" type="number" inputmode="decimal" min="0.1" max="30" step="0.1" value="1.5"><i>°</i></span>
+        <h2>Simplification</h2>
+        <div class="pr-slider">
+          <input id="opt-simplify" type="range" min="0" max="100" step="1" value="50"
+                 aria-label="How far to simplify the model"/>
+          <div class="pr-scale"><span>faithful</span><span>simple</span></div>
+          <div class="pr-reading" id="simplify-reading">0.05 mm · 1.5°</div>
         </div>
-        <div class="pr-field">
-          <label for="opt-deviation">Deviation
-            <small>how far a corner may sit off the face it is put in</small>
-          </label>
-          <span class="pr-num"><input id="opt-deviation" type="number" inputmode="decimal" min="0.001" max="2" step="0.01" value="0.05"><i>mm</i></span>
-        </div>
+        <p class="pr-hint" id="simplify-note">
+          How far the surface is allowed to move. Push it and more of the mesh
+          collapses into flat faces, cylinders and cones — fewer of them, less
+          faithful to the mesh. Worth knowing: a coarsely tessellated ball is
+          itself a poor copy of a ball, so simplifying it often lands
+          <em>closer</em> to what was drawn, not further.
+        </p>
+        <details class="pr-exact">
+          <summary>Set the tolerances by hand, then press Convert</summary>
+          <div class="pr-field">
+            <label for="opt-angle">Face angle
+              <small>how far a facet may lean before it is a face of its own</small>
+            </label>
+            <span class="pr-num"><input id="opt-angle" type="number" inputmode="decimal" min="0.1" max="30" step="0.1" value="1.5"><i>°</i></span>
+          </div>
+          <div class="pr-field">
+            <label for="opt-deviation">Deviation
+              <small>how far a corner may sit off the face it is put in</small>
+            </label>
+            <span class="pr-num"><input id="opt-deviation" type="number" inputmode="decimal" min="0.001" max="20" step="0.01" value="0.05"><i>mm</i></span>
+          </div>
+        </details>
         <div class="pr-field">
           <label for="opt-recognise">Find cylinders and cones
             <small>a ring of flat faces that is really a hole becomes one, with a circle at each end</small>

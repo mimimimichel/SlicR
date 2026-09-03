@@ -365,6 +365,17 @@ function tessellate(face) {
     });
   }
 
+  // A ball is cut in half by a seam it invents, so a face bounded by one ring
+  // that closes on itself is a cap: the ring, and everything between it and
+  // whichever pole the ring's direction says.
+  if (s.type === 'sphere' && face.loops.length === 1 && face.loops[0].steps.length === 1 &&
+      face.loops[0].steps[0].geometry.type === 'circle') {
+    var step = face.loops[0].steps[0];
+    var c = step.geometry;
+    var walk = step.forward ? c.axis : [-c.axis[0], -c.axis[1], -c.axis[2]];
+    return cap(s, c, dot(walk, s.axis) > 0);
+  }
+
   if ((s.type === 'cylinder' || s.type === 'cone') && rings.length === 2 &&
       face.loops.every(function (l) { return l.steps.length === 1 && l.steps[0].geometry.type === 'circle'; })) {
     return tube(s, face.loops[0].steps[0].geometry, face.loops[1].steps[0].geometry);
@@ -374,6 +385,34 @@ function tessellate(face) {
   var to = parameters(s);
   if (!to) return null;
   return flatten(rings, to.of, to.back);
+}
+
+/** Everything on a sphere between one ring and a pole. */
+function cap(s, ring, north) {
+  var z = s.axis;
+  var x = unit(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+  var y = cross(z, x);
+  var height = dot(sub(ring.centre, s.at), z);
+  var from = Math.asin(Math.max(-1, Math.min(1, height / s.radius)));
+  var to = north ? Math.PI / 2 : -Math.PI / 2;
+  var rows = 90;      // fine enough that the cap's own tessellation is not what is measured
+  function on(u, v) {
+    var cv = Math.cos(v), sv = Math.sin(v);
+    return [
+      s.at[0] + s.radius * (x[0] * cv * Math.cos(u) + y[0] * cv * Math.sin(u) + z[0] * sv),
+      s.at[1] + s.radius * (x[1] * cv * Math.cos(u) + y[1] * cv * Math.sin(u) + z[1] * sv),
+      s.at[2] + s.radius * (x[2] * cv * Math.cos(u) + y[2] * cv * Math.sin(u) + z[2] * sv)
+    ];
+  }
+  var out = [];
+  for (var j = 0; j < rows; j++) {
+    var v0 = from + (to - from) * j / rows, v1 = from + (to - from) * (j + 1) / rows;
+    for (var i = 0; i < ROUND; i++) {
+      var u0 = 2 * Math.PI * i / ROUND, u1 = 2 * Math.PI * (i + 1) / ROUND;
+      out.push([on(u0, v0), on(u1, v0), on(u1, v1)], [on(u0, v0), on(u1, v1), on(u0, v1)]);
+    }
+  }
+  return out;
 }
 
 /** Two rings about the same axis, stitched together. */
@@ -688,6 +727,24 @@ console.log('\n=== what it recognises, and what it refuses to ===');
 check('bore-as-cylinder', drilled(40, 30, 5, 6, 32),
   (40 * 30 - Math.PI * 36) * 5);
 check('taper', frustum(64, 12, 4, 20), Math.PI * 20 * (144 + 48 + 16) / 3);
+
+console.log('\n=== a ball, which nothing bounds ===');
+{
+  var ball = recognised(sphere(64, 10), { deviation: 0.05 });
+  ok('comes back one sphere, cut in half so each half has an edge',
+    ball.counts.sphere === 1 && ball.faces.length === 2, JSON.stringify(ball.counts));
+  ok('sharing the one circle between them',
+    ball.edges.length === 1 && ball.edges[0].closed, ball.edges.length);
+  var radius = ball.faces[0].surface.radius;
+  ok('of the radius it was drawn at (' + radius.toFixed(4) + ')', near(radius, 10, 0.02), radius);
+  var coarse = recognised(sphere(32, 10), { deviation: 0.05 });
+  ok('a coarser one is left alone at a tight tolerance',
+    coarse.counts.sphere === 0, JSON.stringify(coarse.counts));
+  ok('and found once the tolerance is opened past its own facets',
+    recognised(sphere(32, 10), { deviation: 0.3 }).counts.sphere === 1);
+}
+
+check('ball', sphere(64, 10), 4 * Math.PI * 1000 / 3);
 
 console.log('\n=== two parts in one file ===');
 var one = box(10, 10, 10);
