@@ -11,7 +11,9 @@
  *   node test-prismatic.js
  */
 globalThis.earcut = require('./js/vendor/earcut.js');
+require('./prismatic/primitives.js');
 var P = require('./prismatic/prismatic.js');
+var Solid = require('./prismatic/solid.js');
 
 var pass = 0, fail = 0;
 function ok(label, cond, detail) {
@@ -395,6 +397,76 @@ ok('the fine box reads as six faces over ' + a1.triangles + ' triangles',
 ok('all of its surface is flat', a1.planarArea > 0.999, a1.planarArea);
 ok('and it is whole', a1.watertight);
 ok('an empty mesh is empty, not a crash', P.analyze(new Float32Array(0)).verdict === 'empty');
+
+console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
+{
+  // The number that says what recognising a mesh's curves will cost. A polygon
+  // standing in for a circle has the arc outside it, and calling the polygon a
+  // cylinder moves the surface out there: below that price nothing can be
+  // recognised at all, however loose the tolerance. It is a property of the
+  // mesh, not of the part, which is the whole reason it has to be measured.
+  ok('a box has no curves to pay for', P.analyze(fine).faceting < 1e-9,
+    P.analyze(fine).faceting);
+  var fineBall = P.analyze(sphere(64, 10)).faceting;
+  var roughBall = P.analyze(sphere(16, 10)).faceting;
+  ok('the same ball costs more the more coarsely it is drawn (' +
+    fineBall.toFixed(4) + ' vs ' + roughBall.toFixed(4) + ' mm)',
+    roughBall > fineBall * 5, fineBall + ' vs ' + roughBall);
+  // A 16-sided ball of radius 10 has its arc 0.19 mm outside its facets, and
+  // the estimate has to land near that or it is no use as something to aim at.
+  var truth = 10 * (1 - Math.cos(Math.PI / 16));
+  ok('and the price is about what the geometry says it is (' + roughBall.toFixed(3) +
+    ' against ' + truth.toFixed(3) + ' mm)',
+    roughBall > truth * 0.5 && roughBall < truth * 3, roughBall + ' vs ' + truth);
+
+  // Drawing it. The triangles are put back onto the surfaces they were
+  // recognised as, which is the only way the screen can answer "did it find the
+  // shape". Done carelessly it is worse than not doing it: a sliver whose
+  // corner is pulled further than the sliver is wide comes out as a spike
+  // through the surface, and a few hundred of those is shrapnel rather than a
+  // part. So: nothing may turn inside out, and nothing may move further than
+  // the tolerance that put the surface there.
+  // The ball moves and the bore does not, and both are right. Every corner of a
+  // bore's facets already sits on the cylinder — the polygon touches the circle
+  // there, it is the middles that are inside it, and a mesh has no vertex in
+  // the middle of a facet. A ball has rings of vertices between its poles that
+  // are off the sphere, and those are the ones that move.
+  [['ball', sphere(32, 10), 0.3, true], ['bore', drilled(40, 30, 5, 6, 32), 0.2, false]]
+    .forEach(function (each) {
+    var name = each[0], mesh = each[1], tol = each[2], expectMove = each[3];
+    var built = P.toSolid(mesh, { deviation: 0.02 });
+    var body = Solid.build(built.brep, { tolerance: tol });
+    var features = Solid.featuresOf(body, built.positions, tol);
+    ok(name + ': every triangle is claimed by a face or by none', !!features);
+    var drawn = Solid.smoothed(body, built.positions, features, tol);
+    var count = built.positions.length / 9;
+    var turned = 0, blown = 0, worst = 0;
+    function facing(a, o) {
+      var ux = a[o + 3] - a[o], uy = a[o + 4] - a[o + 1], uz = a[o + 5] - a[o + 2];
+      var wx = a[o + 6] - a[o], wy = a[o + 7] - a[o + 1], wz = a[o + 8] - a[o + 2];
+      return [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx];
+    }
+    for (var t = 0; t < count; t++) {
+      var o = t * 9;
+      var was = facing(built.positions, o), now = facing(drawn, o);
+      if (was[0] * now[0] + was[1] * now[1] + was[2] * now[2] < 0) turned++;
+      var before = Math.hypot(was[0], was[1], was[2]), after = Math.hypot(now[0], now[1], now[2]);
+      if (before > 0 && after > before * 4) blown++;
+    }
+    for (var v = 0; v < built.positions.length; v += 3) {
+      var moved = Math.hypot(drawn[v] - built.positions[v], drawn[v + 1] - built.positions[v + 1],
+        drawn[v + 2] - built.positions[v + 2]);
+      if (moved > worst) worst = moved;
+    }
+    ok(name + ': and none of them is turned inside out drawing it', turned === 0, turned);
+    ok(name + ': nor stretched out of all recognition', blown === 0, blown);
+    ok(name + ': no corner moves further than the tolerance (' + worst.toFixed(4) + ' mm)',
+      worst <= tol + 1e-9, worst + ' vs ' + tol);
+    ok(expectMove ? name + ': and the corners that were off the surface moved onto it'
+      : name + ': and its corners were on the surface already, so nothing moved',
+      expectMove ? worst > 1e-6 : worst < 1e-9, worst);
+  });
+}
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

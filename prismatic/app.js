@@ -103,12 +103,36 @@
   var REWRITE = -3.4;       // how far the rebuild may go, pushed all the way
   var RESHAPE = -2.0;       // and how far a recognised surface may
 
-  function gaugeToTolerances(gauge, size) {
+  // And how far the shape tolerance has to be able to reach.
+  //
+  // A proportion of the part is the wrong yardstick on its own, and the way it
+  // is wrong is the whole of this. What a recognised surface costs is set by
+  // how coarse the *mesh* is, not by how big the part is: calling a polygon a
+  // cylinder moves the surface out to where the arc is, and a shape a modeller
+  // left in twenty-four sides asks a quarter of a millimetre for that where the
+  // same shape in twenty thousand triangles asks seven thousandths. Thirty
+  // times as much, on a part three times the size. Below that price nothing can
+  // be recognised however hard the gauge is pushed, and the gauge said nothing
+  // about it.
+  //
+  // So the top of its travel is whichever is further: a percent of the part, or
+  // four times what this mesh's own faceting costs. It only ever adds reach —
+  // on a finely tessellated part the first is bigger and nothing changes.
+  var COARSE = 4;
+
+  function topShape(size, faceting) {
+    var scale = size > 0 ? size : 100;
+    return Math.max(scale * Math.pow(10, RESHAPE), (faceting || 0) * COARSE);
+  }
+
+  function gaugeToTolerances(gauge, size, faceting) {
     var t = Math.max(0, Math.min(1, gauge / 100));
     var scale = size > 0 ? size : 100;
+    var floor = scale * Math.pow(10, TIGHTEST);
+    var reach = Math.log(topShape(size, faceting) / floor) / Math.LN10;
     return {
       deviation: scale * Math.pow(10, TIGHTEST + (REWRITE - TIGHTEST) * t),
-      tolerance: scale * Math.pow(10, TIGHTEST + (RESHAPE - TIGHTEST) * t),
+      tolerance: floor * Math.pow(10, reach * t),
       // The angle opens with it, from a fifth of a degree to three: it is the
       // same question asked of the facets rather than of the corners.
       angle: Math.pow(10, Math.log(0.2) / Math.LN10 +
@@ -117,10 +141,18 @@
   }
 
   /** And back again, so a hand-typed tolerance moves the gauge to match. */
-  function tolerancesToGauge(tolerance, size) {
+  function tolerancesToGauge(tolerance, size, faceting) {
     var scale = size > 0 ? size : 100;
-    var t = (Math.log(tolerance / scale) / Math.LN10 - TIGHTEST) / (RESHAPE - TIGHTEST);
+    var floor = scale * Math.pow(10, TIGHTEST);
+    var reach = Math.log(topShape(size, faceting) / floor) / Math.LN10;
+    if (!(reach > 0)) return 0;
+    var t = Math.log(tolerance / floor) / Math.LN10 / reach;
     return Math.max(0, Math.min(100, Math.round(t * 100)));
+  }
+
+  /** How coarse the mesh on screen is, once it has been looked at. */
+  function meshFaceting() {
+    return state.look ? state.look.faceting || 0 : 0;
   }
 
   /** How big the part is, corner to corner. Measured, not asked of the viewer. */
@@ -147,7 +179,7 @@
 
   /** Move the two fields to wherever the gauge is, and say what that means. */
   function applyGauge(rerun) {
-    var found = gaugeToTolerances(parseFloat(el('opt-simplify').value), modelSize());
+    var found = gaugeToTolerances(parseFloat(el('opt-simplify').value), modelSize(), meshFaceting());
     el('opt-deviation').value = roundish(found.deviation);
     el('opt-tolerance').value = roundish(found.tolerance);
     el('opt-angle').value = found.angle.toFixed(found.angle < 1 ? 2 : 1);
@@ -206,6 +238,11 @@
         return;
       }
       state.look = found;
+      // How far the gauge can reach depends on how coarse this mesh is, and
+      // that is only known now that it has been looked at. So the gauge is put
+      // back where it says it is — unless somebody has typed a tolerance by
+      // hand, in which case theirs stands.
+      if (state.byGauge !== false) applyGauge(false);
       showReading(state.body ? null : '<b>' + count(found.faces) + '</b> flat face' +
         (found.faces === 1 ? '' : 's'));
       state.viewer.setMesh(found.positions, found.face);
@@ -221,11 +258,32 @@
     }, 30);
   }
 
+  /**
+   * The sentence that was missing, and that this whole page needed.
+   *
+   * Somebody looking at a coarse mesh pushes the gauge to the end, nothing is
+   * recognised, and there is nothing on the screen to say why. Why is that the
+   * mesh's own faceting: calling a twenty-four sided polygon a cylinder puts
+   * the surface out where the arc is, a quarter of a millimetre away, and no
+   * shape tolerance below that can call it anything. Said out loud it stops
+   * being a mystery and becomes a number to aim at.
+   */
+  function priceOf(found) {
+    if (!(found.faceting > 1e-6)) return '';
+    return ' Its curves are drawn coarsely enough that naming one — a cylinder, a ball — ' +
+      'moves the surface by at least ' + mm(found.faceting) + ', so the shape tolerance has ' +
+      'to reach that before anything is found.';
+  }
+
   function showMesh(found) {
     facts(el('facts'), [
       ['Triangles', count(found.triangles)],
       ['Flat faces', count(found.faces)],
       ['Off flat', mm(found.deviation)],
+      // The number that says what recognising this mesh's curves will cost, and
+      // therefore how far the gauge has to go before anything happens at all.
+      // A part with no curves in it has nothing to pay and the row is left out.
+      found.faceting > 1e-6 ? ['Curves cost at least', mm(found.faceting)] : null,
       ['Watertight', found.watertight ? 'yes' : (found.openEdges ? found.openEdges + ' open edges' : 'no')]
     ]);
 
@@ -238,7 +296,7 @@
       box.textContent = 'Almost nothing on this mesh folds sharply, so it was never a prismatic ' +
         'part — this is a scan or a sculpt. Converting it would flatten what is curved into ' +
         'faces up to ' + found.deviation.toFixed(3) + ' mm from where the surface is now. ' +
-        'Tighten the deviation, or leave it be.';
+        'Tighten the deviation, or leave it be.' + priceOf(found);
     } else if (found.verdict === 'mixed') {
       box.className = 'pr-verdict';
       // Curved regions are only flattened where their facets fall inside the
@@ -247,7 +305,8 @@
       // guessed at.
       box.textContent = 'Flat faces and curved ones together. Where facets sit closer than the ' +
         'tolerances allow they are merged into one plane — here that moves the surface by at ' +
-        'most ' + found.deviation.toFixed(3) + ' mm. The rest is kept facet for facet.';
+        'most ' + found.deviation.toFixed(3) + ' mm. The rest is kept facet for facet.' +
+        priceOf(found);
     } else if (found.deviation < 1e-6 && found.triangles <= found.faces * 2) {
       box.className = 'pr-verdict good';
       box.textContent = 'Flat to the micron, and in as few triangles as those faces can be drawn. ' +
@@ -312,8 +371,12 @@
         // gained, seen rather than counted.
         if (state.body) {
           showSolidReading();
-          var features = featuresOf(state.body, found.positions, settings.tolerance);
-          if (features) state.viewer.setMesh(smoothed(state.body, found.positions, features), features);
+          var Solid = window.PrismaticSolid;
+          var features = Solid.featuresOf(state.body, found.positions, settings.tolerance);
+          if (features) {
+            var drawn = Solid.smoothed(state.body, found.positions, features, settings.tolerance);
+            state.viewer.setMesh(drawn, features, Solid.normalsOf(state.body, drawn, features));
+          }
           state.viewer.setEdges(solidEdges(state.body));
         }
         if (typeof then === 'function') then();
@@ -321,106 +384,6 @@
       toast('Rebuilt: ' + count(report.trianglesBefore) + ' triangles → ' + count(report.triangles) +
         ', across ' + count(report.faces) + ' faces.', 'good');
     }, 40);
-  }
-
-  /**
-   * Which face of the finished solid each triangle of the mesh belongs to, so
-   * that the picture says the same thing the panel does: a bore that was
-   * recognised as one cylinder is drawn as one colour rather than as the
-   * twenty-eight little planes it is still made of.
-   *
-   * Worked out from the geometry rather than carried along from the rebuild:
-   * a triangle belongs to the face whose surface it sits on and whose way of
-   * facing it agrees with. The converted mesh is small — that being the point
-   * of it — so asking every triangle about every face is nothing.
-   */
-  function featuresOf(body, positions, tolerance) {
-    if (!body || !body.faces.length || body.faces.length > 400) return null;
-    var P = window.PrismaticPrimitives;
-    var count = (positions.length / 9) | 0;
-    var out = new Int32Array(count);
-    var slack = Math.max(tolerance, 1e-6) * 2;
-    for (var t = 0; t < count; t++) {
-      var o = t * 9;
-      var mid = [
-        (positions[o] + positions[o + 3] + positions[o + 6]) / 3,
-        (positions[o + 1] + positions[o + 4] + positions[o + 7]) / 3,
-        (positions[o + 2] + positions[o + 5] + positions[o + 8]) / 3
-      ];
-      var ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1], uz = positions[o + 5] - positions[o + 2];
-      var wx = positions[o + 6] - positions[o], wy = positions[o + 7] - positions[o + 1], wz = positions[o + 8] - positions[o + 2];
-      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-      var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      var normal = [nx / len, ny / len, nz / len];
-
-      var best = -1, bestGap = Infinity;
-      for (var f = 0; f < body.faces.length; f++) {
-        var surface = body.faces[f].surface;
-        var gap = P.distance(surface, mid);
-        if (!(gap <= slack) || gap >= bestGap) continue;
-        var facing = P.normalAt(surface, mid);
-        if (!facing) continue;
-        if (normal[0] * facing[0] + normal[1] * facing[1] + normal[2] * facing[2] < 0.7) continue;
-        best = f; bestGap = gap;
-      }
-      out[t] = best >= 0 ? best : body.faces.length;
-    }
-    return out;
-  }
-
-  /**
-   * The triangles put back onto the surfaces they were recognised as.
-   *
-   * Without this the picture is a lie in the one direction that matters. A ring
-   * of facets recognised as a cylinder is written into the file as a cylinder —
-   * smooth, exact, that is the whole point — and drawn on screen as the ring of
-   * facets it arrived as, so the answer to "did it find the shape" looks like
-   * no. Moving each corner onto its own face's surface draws what the file says
-   * rather than what went into it.
-   *
-   * A corner used by triangles of two different faces is on the edge between
-   * them and is left where the solid put it, which is what keeps the drawing
-   * closed rather than torn along every seam.
-   */
-  function smoothed(body, positions, features) {
-    var P = window.PrismaticPrimitives;
-    if (!P || !P.pull) return positions;
-    var grid = 1e4;
-    var key = function (o) {
-      return Math.round(positions[o] * grid) + ',' + Math.round(positions[o + 1] * grid) +
-        ',' + Math.round(positions[o + 2] * grid);
-    };
-    var owner = new Map();
-    var count = (positions.length / 9) | 0;
-    var t, k, at;
-    for (t = 0; t < count; t++) {
-      for (k = 0; k < 3; k++) {
-        at = key(t * 9 + k * 3);
-        var was = owner.get(at);
-        if (was === undefined) owner.set(at, features[t]);
-        else if (was !== features[t]) owner.set(at, -1);
-      }
-    }
-
-    var moved = new Map();
-    var out = new Float32Array(positions);
-    for (t = 0; t < count; t++) {
-      var face = body.faces[features[t]];
-      if (!face || !face.surface || face.surface.type === 'plane') continue;
-      for (k = 0; k < 3; k++) {
-        var o = t * 9 + k * 3;
-        at = key(o);
-        if (owner.get(at) !== features[t]) continue;
-        var put = moved.get(at);
-        if (!put) {
-          put = P.pull([face.surface], [positions[o], positions[o + 1], positions[o + 2]], 0);
-          if (!put) continue;
-          moved.set(at, put);
-        }
-        out[o] = put[0]; out[o + 1] = put[1]; out[o + 2] = put[2];
-      }
-    }
-    return out;
   }
 
   /** The body's edges as line segments, circles walked round. */
@@ -786,7 +749,8 @@
     ['opt-angle', 'opt-deviation', 'opt-tolerance', 'opt-square', 'opt-recognise'].forEach(function (id) {
       el(id).addEventListener('change', function () {
         if (id === 'opt-tolerance' || id === 'opt-deviation') {
-          el('opt-simplify').value = tolerancesToGauge(tolerances().tolerance, modelSize());
+          state.byGauge = false;
+          el('opt-simplify').value = tolerancesToGauge(tolerances().tolerance, modelSize(), meshFaceting());
         }
         changed();
       });
@@ -796,8 +760,12 @@
     // the whole gauge is one answer rather than a hundred, and the answer is
     // the model itself rather than a description of it — the point of a gauge
     // being that you can see what it did.
-    el('opt-simplify').addEventListener('input', function () { applyGauge(false); });
+    el('opt-simplify').addEventListener('input', function () {
+      state.byGauge = true;
+      applyGauge(false);
+    });
     el('opt-simplify').addEventListener('change', function () {
+      state.byGauge = true;
       applyGauge(false);
       if (state.source) convert();
     });

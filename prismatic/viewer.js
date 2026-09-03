@@ -84,7 +84,7 @@
   }
 
   /** Show a mesh, coloured by the face each triangle was put in. */
-  Viewer.prototype.setMesh = function (positions, face) {
+  Viewer.prototype.setMesh = function (positions, face, normals) {
     this.clearMesh();
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions.slice(), 3));
@@ -102,18 +102,29 @@
       }
       geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     }
-    geo.computeVertexNormals();
+    // Flat shading while what is on screen is the mesh, because a face that is
+    // not flat should look like it is not flat: smoothing the normals would
+    // hide the very thing being judged.
+    //
+    // Once a solid has been recognised out of it that is no longer the thing
+    // being judged. A ring of two dozen facets called one cylinder is a
+    // cylinder in the file — smooth, exact — and drawing it faceted says the
+    // shape was not found when it was. So when the normals of the recognised
+    // surfaces are handed in, they are used: a cylinder comes out round, and
+    // the corners between faces stay crisp because a triangle soup keeps its
+    // own copy of every corner and each copy carries its own face's normal.
+    var given = !!(normals && normals.length === positions.length);
+    if (given) geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals.slice(), 3));
+    else geo.computeVertexNormals();
     geo.computeBoundingBox();
 
-    // Flat shading, because a face that is not flat should look like it is not
-    // flat: smoothing the normals would hide the very thing being judged. The
-    // base colour has to be white while the face colours are in use, or every
-    // hue comes back multiplied by it and they all look alike.
+    // The base colour has to be white while the face colours are in use, or
+    // every hue comes back multiplied by it and they all look alike.
     this.hasColors = !!(face && face.length * 9 === positions.length);
     var painted = this.hasColors && this.shadeByFace;
     this.mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
       color: painted ? 0xffffff : PLAIN, specular: 0x1c2438, shininess: 18,
-      flatShading: true, side: THREE.DoubleSide,
+      flatShading: !given, side: THREE.DoubleSide,
       vertexColors: painted
     }));
     this.group.add(this.mesh);

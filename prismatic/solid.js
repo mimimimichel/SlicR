@@ -1081,6 +1081,219 @@
     return worst;
   }
 
-  root.PrismaticSolid = { build: build, DEFAULTS: DEFAULTS };
+  // ---------------------------------------------------------------------------
+  // Drawing what was found
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Which face of the finished solid each triangle of the mesh belongs to, so
+   * that the picture says the same thing the panel does: a bore that was
+   * recognised as one cylinder is drawn as one colour rather than as the
+   * twenty-eight little planes it is still made of.
+   *
+   * Worked out from the geometry rather than carried along from the rebuild:
+   * a triangle belongs to the face whose surface it sits on and whose way of
+   * facing it agrees with. The converted mesh is small — that being the point
+   * of it — so asking every triangle about every face is nothing.
+   */
+  function featuresOf(body, positions, tolerance) {
+    if (!body || !body.faces.length || body.faces.length > 400) return null;
+    var P = root.PrismaticPrimitives;
+    var count = (positions.length / 9) | 0;
+    var out = new Int32Array(count);
+    // The whole triangle has to be on the surface, and no further off it than
+    // the surface was allowed to be off the facets in the first place. Asking
+    // only about the middle, and allowing twice the tolerance while asking,
+    // hands triangles to faces they are nowhere near — which was harmless while
+    // this only chose a colour and is not harmless now that it also decides
+    // where the corner gets drawn.
+    var slack = Math.max(tolerance, 1e-6);
+    for (var t = 0; t < count; t++) {
+      var o = t * 9;
+      var mid = [
+        (positions[o] + positions[o + 3] + positions[o + 6]) / 3,
+        (positions[o + 1] + positions[o + 4] + positions[o + 7]) / 3,
+        (positions[o + 2] + positions[o + 5] + positions[o + 8]) / 3
+      ];
+      var ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1], uz = positions[o + 5] - positions[o + 2];
+      var wx = positions[o + 6] - positions[o], wy = positions[o + 7] - positions[o + 1], wz = positions[o + 8] - positions[o + 2];
+      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      var normal = [nx / len, ny / len, nz / len];
+
+      var best = -1, bestGap = Infinity;
+      for (var f = 0; f < body.faces.length; f++) {
+        var surface = body.faces[f].surface;
+        var gap = P.distance(surface, mid);
+        if (!(gap <= slack) || gap >= bestGap) continue;
+        var off = 0;
+        for (var c = 0; c < 3; c++) {
+          var corner = P.distance(surface, [positions[o + c * 3], positions[o + c * 3 + 1], positions[o + c * 3 + 2]]);
+          if (corner > off) off = corner;
+        }
+        if (!(off <= slack)) continue;
+        var facing = P.normalAt(surface, mid);
+        if (!facing) continue;
+        if (normal[0] * facing[0] + normal[1] * facing[1] + normal[2] * facing[2] < 0.7) continue;
+        best = f; bestGap = gap;
+      }
+      out[t] = best >= 0 ? best : body.faces.length;
+    }
+    return out;
+  }
+
+  /**
+   * The triangles put back onto the surfaces they were recognised as.
+   *
+   * Without this the picture is a lie in the one direction that matters. A ring
+   * of facets recognised as a cylinder is written into the file as a cylinder —
+   * smooth, exact, that is the whole point — and drawn on screen as the ring of
+   * facets it arrived as, so the answer to "did it find the shape" looks like
+   * no. Moving each corner onto its own face's surface draws what the file says
+   * rather than what went into it.
+   *
+   * A corner used by triangles of two different faces is on the edge between
+   * them and is left where the solid put it, which is what keeps the drawing
+   * closed rather than torn along every seam.
+   *
+   * And then the part that has to be got right, because getting it wrong turns
+   * the picture into shrapnel: a corner may be moved a long way compared to the
+   * triangle it is a corner of. A sliver a hundredth of a millimetre across
+   * whose corner is pulled a tenth of a millimetre does not become smooth, it
+   * becomes a spike through the surface. So a triangle the move would turn
+   * inside out, or stretch out of all recognition, has its corners left alone —
+   * and since freezing one corner changes the triangles around it, that is
+   * asked again until nothing else objects.
+   */
+  function smoothed(body, positions, features, tolerance) {
+    var P = root.PrismaticPrimitives;
+    if (!P || !P.pull) return positions;
+    var count = (positions.length / 9) | 0;
+    var grid = 1e4;
+    var key = function (o) {
+      return Math.round(positions[o] * grid) + ',' + Math.round(positions[o + 1] * grid) +
+        ',' + Math.round(positions[o + 2] * grid);
+    };
+
+    // Which face each corner belongs to, or none if the triangles around it
+    // disagree — those are the corners on the edges between faces. And where
+    // each of them is written, since a triangle soup names the same corner once
+    // per triangle that has it.
+    var owner = new Map();
+    var seats = new Map();
+    var t, k, at;
+    for (t = 0; t < count; t++) {
+      for (k = 0; k < 3; k++) {
+        var where = t * 9 + k * 3;
+        at = key(where);
+        var was = owner.get(at);
+        if (was === undefined) owner.set(at, features[t]);
+        else if (was !== features[t]) owner.set(at, -1);
+        var list = seats.get(at);
+        if (!list) { list = []; seats.set(at, list); }
+        list.push(where);
+      }
+    }
+
+    var want = new Map();
+    for (t = 0; t < count; t++) {
+      var face = body.faces[features[t]];
+      if (!face || !face.surface || face.surface.type === 'plane') continue;
+      for (k = 0; k < 3; k++) {
+        var o = t * 9 + k * 3;
+        at = key(o);
+        if (owner.get(at) !== features[t] || want.has(at)) continue;
+        var put = P.pull([face.surface], [positions[o], positions[o + 1], positions[o + 2]], tolerance);
+        if (put) want.set(at, put);
+      }
+    }
+    if (!want.size) return positions;
+
+    var out = new Float32Array(positions);
+    var frozen = new Set();
+    var normalOf = function (a, o) {
+      var ux = a[o + 3] - a[o], uy = a[o + 4] - a[o + 1], uz = a[o + 5] - a[o + 2];
+      var wx = a[o + 6] - a[o], wy = a[o + 7] - a[o + 1], wz = a[o + 8] - a[o + 2];
+      return [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx];
+    };
+
+    for (var round = 0; round < 5; round++) {
+      out.set(positions);
+      want.forEach(function (put, where) {
+        if (frozen.has(where)) return;
+        var list = seats.get(where);
+        for (var i = 0; i < list.length; i++) {
+          out[list[i]] = put[0]; out[list[i] + 1] = put[1]; out[list[i] + 2] = put[2];
+        }
+      });
+
+      var objected = false;
+      for (t = 0; t < count; t++) {
+        var o2 = t * 9;
+        var was = normalOf(positions, o2), now = normalOf(out, o2);
+        var before = Math.hypot(was[0], was[1], was[2]);
+        var after = Math.hypot(now[0], now[1], now[2]);
+        var turned = was[0] * now[0] + was[1] * now[1] + was[2] * now[2];
+        if (before > 0 && (turned <= 0 || after > before * 3)) {
+          for (k = 0; k < 3; k++) frozen.add(key(o2 + k * 3));
+          objected = true;
+        }
+      }
+      if (!objected) break;
+    }
+    return out;
+  }
+
+  /**
+   * The normal of the recognised surface at every corner of the drawing.
+   *
+   * This is what makes a coarse mesh look like the solid it turned out to be.
+   * Moving the corners onto the surface can only ever be as smooth as the
+   * tessellation was — a cylinder drawn in twenty-four sides has all of its
+   * corners on the cylinder already, so nothing moves and it is still drawn as
+   * a two-dozen-sided prism. Shading it with the surface's own normal instead
+   * of the facet's makes it round, which is what the file says it is.
+   *
+   * A triangle no face claims, and a triangle on a plane, keep the facet's own
+   * normal: they are flat and they should look flat.
+   */
+  function normalsOf(body, positions, features) {
+    var P = root.PrismaticPrimitives;
+    var count = (positions.length / 9) | 0;
+    if (!features || features.length !== count) return null;
+    var out = new Float32Array(positions.length);
+    for (var t = 0; t < count; t++) {
+      var o = t * 9;
+      var ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1],
+        uz = positions[o + 5] - positions[o + 2];
+      var wx = positions[o + 6] - positions[o], wy = positions[o + 7] - positions[o + 1],
+        wz = positions[o + 8] - positions[o + 2];
+      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      var len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      var flat = [nx / len, ny / len, nz / len];
+      var face = body.faces[features[t]];
+      var curved = face && face.surface && face.surface.type !== 'plane' ? face.surface : null;
+      for (var k = 0; k < 3; k++) {
+        var at = o + k * 3;
+        var n = null;
+        if (curved) {
+          n = P.normalAt(curved, [positions[at], positions[at + 1], positions[at + 2]]);
+          // Which side of the surface the material is on is what the facet
+          // knows and the surface does not.
+          if (n && (n[0] * flat[0] + n[1] * flat[1] + n[2] * flat[2]) < 0) {
+            n = [-n[0], -n[1], -n[2]];
+          }
+        }
+        if (!n) n = flat;
+        out[at] = n[0]; out[at + 1] = n[1]; out[at + 2] = n[2];
+      }
+    }
+    return out;
+  }
+
+  root.PrismaticSolid = {
+    build: build, featuresOf: featuresOf, smoothed: smoothed,
+    normalsOf: normalsOf, DEFAULTS: DEFAULTS
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.PrismaticSolid;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

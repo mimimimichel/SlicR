@@ -1219,8 +1219,58 @@
       faces: seg.count,
       planarArea: total > 0 ? planar / total : 0,
       sharpness: between > 0 ? sharp / between : 0,
-      deviation: worst
+      deviation: worst,
+      faceting: facetingOf(mesh, cosSharp)
     };
+  }
+
+  /**
+   * How coarse the mesh is — the one number that says what recognising its
+   * curves is going to cost, before anything is attempted.
+   *
+   * A tessellated curve is a polygon, and the surface it stands for passes
+   * outside it: with a chord of c and a turn of theta at each fold, the arc
+   * bulges (c/2)tan(theta/4) past the chord. That is the price of calling the
+   * polygon a cylinder, and it is a property of the mesh, not of the part. A
+   * doughnut in twenty thousand triangles asks seven thousandths of a
+   * millimetre; the same shape a modeller left in twenty-four sides asks a
+   * quarter of one — thirty times as much, on a part three times the size.
+   *
+   * It matters because no tolerance below it can recognise anything at all,
+   * however hard the gauge is pushed, and until it was measured there was
+   * nothing on the screen to say so. The answer taken is the ninth decile by
+   * length of fold, so that the coarsest part of a mesh sets the price rather
+   * than being averaged away by the finest.
+   *
+   * Only gentle folds count. A fold of twenty degrees or more is an edge of the
+   * part, and an edge of the part costs nothing to keep.
+   */
+  function facetingOf(mesh, cosSharp) {
+    var cost = [], span = [], total = 0;
+    for (var e = 0; e < mesh.pairA.length; e++) {
+      var a = mesh.pairA[e], b = mesh.pairB[e], len = mesh.pairLen[e];
+      if (!(len > 0)) continue;
+      var lean = mesh.nx[a] * mesh.nx[b] + mesh.ny[a] * mesh.ny[b] + mesh.nz[a] * mesh.nz[b];
+      if (lean < cosSharp) continue;
+      if (lean > 1) lean = 1;
+      var turn = Math.acos(lean);
+      if (!(turn > 1e-7)) continue;          // flat here, and flat is free
+      // The reach across the fold: a triangle's height on the edge it shares is
+      // twice its area over that edge, and the chord spans both of them.
+      var chord = (mesh.area[a] + mesh.area[b]) * 2 / len;
+      cost.push(chord / 2 * Math.tan(turn / 4));
+      span.push(len);
+      total += len;
+    }
+    if (!cost.length || !(total > 0)) return 0;
+    var order = cost.map(function (_, i) { return i; })
+      .sort(function (x, y) { return cost[x] - cost[y]; });
+    var run = 0;
+    for (var i = 0; i < order.length; i++) {
+      run += span[order[i]];
+      if (run >= total * 0.9) return cost[order[i]];
+    }
+    return cost[order[order.length - 1]];
   }
 
   /** Is this the mesh of a prismatic part at all, or a scan pretending to be one? */
@@ -1245,7 +1295,7 @@
     var mesh = buildMesh(positions, o);
     if (!mesh.count) {
       return {
-        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0,
+        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0,
         verdict: 'empty', watertight: false, openEdges: 0
       };
     }
@@ -1256,6 +1306,7 @@
       faces: stats.faces,
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
+      faceting: stats.faceting,
       deviation: stats.deviation,
       openEdges: mesh.openEdges,
       watertight: mesh.openEdges === 0 && mesh.nonManifold === 0,
@@ -1278,7 +1329,7 @@
     var mesh = buildMesh(positions, o);
     if (!mesh.count) {
       return {
-        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0,
+        triangles: 0, faces: 0, planarArea: 0, sharpness: 0, deviation: 0, faceting: 0,
         verdict: 'empty', watertight: false, openEdges: 0,
         positions: new Float32Array(0), face: new Int32Array(0), edges: new Float32Array(0)
       };
@@ -1312,6 +1363,7 @@
       faces: stats.faces,
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
+      faceting: stats.faceting,
       deviation: stats.deviation,
       openEdges: mesh.openEdges,
       watertight: mesh.openEdges === 0 && mesh.nonManifold === 0,
@@ -1382,6 +1434,7 @@
       trianglesBefore: mesh.sourceCount,
       planarArea: stats.planarArea,
       sharpness: stats.sharpness,
+      faceting: stats.faceting,
       deviation: stats.deviation,
       moved: snap.worst,
       volume: after,

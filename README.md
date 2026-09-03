@@ -170,14 +170,39 @@ hundred little planes were is not a rewrite, it is the mesh's own surface named
 modelled by hand it is the difference between a thousand faces and fifty, and
 tying the two together was for a long time the single worst thing in here.
 
+How far it can reach is set by the mesh, not by the part, and that is worth
+saying plainly because it is where the gauge used to be useless. A tessellated
+curve is a polygon, and the surface it stands for passes outside it: calling the
+polygon a cylinder moves the surface out to where the arc is. That price —
+`(c/2)·tan(θ/4)` for a chord of `c` and a fold of `θ` — is a property of the
+mesh. A doughnut in twenty thousand triangles asks seven thousandths of a
+millimetre for it; the same shape a modeller left in twenty-four sides asks a
+quarter of one, thirty times as much on a part three times the size. Below that
+price nothing can be recognised however hard the gauge is pushed. So it is
+measured when the file is opened, shown in the panel as **Curves cost at
+least**, and the top of the gauge's travel is whichever is further: a percent of
+the part, or four times that price. A 624-triangle turned part comes back as
+**six faces** — two cylinders, a torus, a ball and two ends — where before the
+gauge could not reach far enough to find any of them.
+
 Once the surfaces are known the corners are put back on them, the same way the
 flat rebuild puts them on the crossings of their planes: a corner belongs to
 every face that meets there, and after a ring of facets has become one cylinder
 it has to be on the cylinder. Otherwise the file says the edge of a face is
 somewhere the face is not, which is what a modeller trips over and why a body
-will not stitch. The screen shows the same thing — the triangles are drawn on
-the surfaces they were recognised as, not as the facets they arrived as, so
-"did it find the shape" is a question you can answer by looking.
+will not stitch.
+
+The screen shows the same thing. The triangles are moved onto the surfaces they
+were recognised as, and — this is what actually makes it look like the answer —
+shaded with those surfaces' own normals rather than the facets'. A cylinder
+found in twenty-four sides has every corner on the cylinder already, so nothing
+moves and it would still be drawn as a two-dozen-sided prism; shaded from the
+surface it comes out round, which is what the file says it is. Corners between
+two faces stay crisp, because a triangle soup keeps its own copy of each corner
+and each copy carries its own face's normal. And a corner is never moved further
+than the tolerance that put the surface there, nor at all if the move would turn
+a sliver inside out — done carelessly this is worse than not doing it, and for
+one version it was: a few hundred spikes through the surface instead of a part.
 
 It matters more than it sounds. A tolerance tighter than a mesh's own facets
 means nothing can be recognised — a ball tessellated in 32 segments is 0.08 mm
