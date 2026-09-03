@@ -1,0 +1,84 @@
+plugins {
+    id 'com.android.application'
+}
+
+/*
+ * The web app is the single source of truth: it lives two directories up, and
+ * the build copies exactly the files it needs into the APK's assets. They keep
+ * their places in the tree — the page asks for ../styles/main.css and
+ * ../js/vendor/three.min.js, and those paths have to still mean something
+ * inside the APK.
+ *
+ * Listing the files rather than the directory is deliberate: prismatic/ also
+ * holds this Android project, and an app that shipped its own build system
+ * inside itself would be a strange thing.
+ */
+def repoRoot = rootProject.file("../..")
+def webAppOut = layout.buildDirectory.dir("generated/webapp")
+
+tasks.register('bundleWebApp', Copy) {
+    description = 'Copies the Prismatic page into assets/www for offline use.'
+    into webAppOut.map { it.dir("www") }
+
+    from(repoRoot) {
+        include 'prismatic/index.html'
+        include 'prismatic/style.css'
+        include 'prismatic/app.js'
+        include 'prismatic/viewer.js'
+        include 'prismatic/prismatic.js'
+        include 'prismatic/step.js'
+        include 'prismatic/android.js'
+        include 'styles/main.css'
+        include 'js/vendor/three.min.js'
+        include 'js/vendor/earcut.js'
+        include 'js/slicer/loaders.js'
+    }
+
+    doLast {
+        def www = webAppOut.get().dir("www")
+        ['prismatic/index.html', 'prismatic/prismatic.js', 'prismatic/step.js',
+         'styles/main.css', 'js/vendor/three.min.js', 'js/slicer/loaders.js'].each { path ->
+            if (!www.file(path).asFile.exists()) {
+                throw new GradleException(path + " was not bundled — check repoRoot")
+            }
+        }
+    }
+}
+
+android {
+    namespace 'com.odpsstudio.prismatic'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.odpsstudio.prismatic"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs += webAppOut
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.withType(com.android.build.gradle.tasks.MergeSourceSetFolders).configureEach {
+    dependsOn 'bundleWebApp'
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+}

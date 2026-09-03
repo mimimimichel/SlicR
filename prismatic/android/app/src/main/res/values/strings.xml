@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Prismatic</string>
+    <string name="open_with">Rebuild with Prismatic</string>
+    <string name="pick_model">Choose a mesh (STL, OBJ, 3MF)</string>
+    <string name="save_file">Save the solid</string>
+    <string name="saved">Saved</string>
+    <string name="save_failed">Could not save the file</string>
+    <string name="no_file_app">No app on this device can pick files</string>
+    <string name="open_failed">That file could not be read</string>
+</resources>

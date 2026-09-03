@@ -87,6 +87,7 @@ node test-profiles.js            # all 43 profiles with every feature on
 node test-prismatic.js           # mesh to solid, on shapes whose volume is known
 node test-step.js                # and the STEP written from it, read back cold
 node test-ui-prismatic.js        # the app around both, down to the saved files
+node test-ui-android.js          # and the bridge the Android app saves across
 ```
 
 ### Measured against a reference
@@ -146,6 +147,23 @@ part's real edges between them, and one where they were not is a confetti of
 patches you can see at a glance. Tolerances can then be dialled in against the
 picture, and Convert only ever does what is already on the screen.
 
+It runs on a phone or a tablet too: `prismatic/android/` is a WebView shell
+around the same page, and its APK asks for **no permissions at all**. A mesh
+comes in through the system file picker, the STEP file goes back out through the
+storage picker, and nothing in between wants the network — a part you are
+converting is nobody's business but yours.
+
+```bash
+cd prismatic/android
+echo "sdk.dir=/path/to/Android/sdk" > local.properties
+./gradlew assembleDebug        # -> app/build/outputs/apk/debug/app-debug.apk
+```
+
+A file cannot cross into a WebView or back out of one as a blob, so both
+directions go in pieces with the bytes counted on each side; `test-ui-android.js`
+drives that against a stand-in for the native side — including a piece dropped
+mid-transfer — and reads the STEP that comes out the far end back as a solid.
+
 It is deliberately timid about what it will do to a part. Each rebuilt face is
 measured against the facets it replaces, and the finished body against the
 volume and the seams of the one it came from; what does not add up comes back
@@ -201,5 +219,7 @@ prismatic/            the mesh-to-solid app, on its own
   step.js             those faces written out as a STEP solid
   viewer.js           its viewport
   app.js              its UI
+  android.js          the file bridge, when it is running inside the app
+  android/            its own WebView wrapper, asking for no permissions
 android/              the WebView wrapper
 ```

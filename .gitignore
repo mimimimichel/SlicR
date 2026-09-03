@@ -3,4 +3,9 @@ android/build/
 android/app/build/
 android/.gradle/
 android/local.properties
+prismatic/android/build/
+prismatic/android/app/build/
+prismatic/android/.gradle/
+prismatic/android/local.properties
+*.apk
 *.gcode

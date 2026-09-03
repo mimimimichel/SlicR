@@ -278,7 +278,20 @@
     return (state.name || 'mesh').replace(/\.(stl|obj|3mf|step|stp)$/i, '');
   }
 
-  function download(blob, name) {
+  /**
+   * Hand a file to whatever is holding the page. Returns where it went, because
+   * the two ends of that differ: a browser has the file the moment the link is
+   * clicked, while Android has it once the storage picker has been answered,
+   * and telling somebody a file is saved before they have said where is a small
+   * lie that costs them the file.
+   */
+  function download(blob, name, mime) {
+    if (window.PrismaticNative) {
+      window.PrismaticNative.save(blob, name, mime, function (err) {
+        if (err) toast('That file did not reach Android: ' + (err.message || err), 'bad');
+      });
+      return 'android';
+    }
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
@@ -287,13 +300,20 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    return 'browser';
+  }
+
+  /** "Saved x." in a browser; "here it is, say where it goes" on a phone. */
+  function saidWhere(where, name, rest) {
+    if (where === 'android') return name + ' is ready — choose where it goes. ' + rest;
+    return 'Saved ' + name + ' — ' + rest;
   }
 
   function saveSTL() {
     if (!state.current) return;
     var name = baseName() + (state.report ? '-solid' : '') + '.stl';
-    download(stl(state.current, name), name);
-    toast('Saved ' + name + ' — the mesh, for printing.', 'good');
+    var where = download(stl(state.current, name), name, 'model/stl');
+    toast(saidWhere(where, name, 'The mesh, for printing.'), 'good');
   }
 
   /**
@@ -314,17 +334,17 @@
       return;
     }
     state.saved = file;
-    download(new Blob([file.text], { type: 'application/step' }), name);
+    var where = download(new Blob([file.text], { type: 'model/step' }), name, 'model/step');
     showSaved(file, name);
 
     if (!file.solid) {
-      toast('Saved ' + name + ', but as surfaces rather than a solid: the mesh has ' +
+      toast(saidWhere(where, name, 'It is surfaces rather than a solid: the mesh has ' +
         file.looseEdges + ' open edge' + (file.looseEdges === 1 ? '' : 's') +
-        ', so there is no inside to it. Fusion will offer to stitch them.', 'bad');
+        ', so there is no inside to it. Fusion will offer to stitch them.'), 'bad');
     } else {
-      toast('Saved ' + name + ' — ' + count(file.faces) + ' faces over ' + count(file.edges) +
+      toast(saidWhere(where, name, count(file.faces) + ' faces over ' + count(file.edges) +
         ' edges, as ' + (file.bodies === 1 ? 'one solid body' : count(file.bodies) + ' solid bodies') +
-        '. Fusion opens it as a body you can edit.', 'good');
+        '. Fusion opens it as a body you can edit.'), 'good');
     }
   }
 
@@ -468,6 +488,13 @@
     stage.addEventListener('drop', function (ev) {
       openFile(ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0]);
     });
+
+    // A mesh opened with the app from somewhere else: at startup, and again
+    // whenever Android says another one has arrived.
+    if (window.PrismaticNative) {
+      window.PrismaticAndroidOpen = function () { window.PrismaticNative.incoming(openFile); };
+      window.PrismaticAndroidOpen();
+    }
 
     window.addEventListener('keydown', function (ev) {
       if (ev.target && /input|textarea/i.test(ev.target.tagName)) return;
