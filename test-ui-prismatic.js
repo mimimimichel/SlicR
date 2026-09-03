@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const L = require('./js/slicer/loaders.js');
 const P = require('./prismatic/prismatic.js');
+const V = require('./test-step.js');      // the same reader test-step.js checks with
 const APP = process.env.APP || 'http://localhost:8099/prismatic/index.html';
 
 /** An ASCII STL of a 20 x 30 x 10 box, cut into 768 facets. */
@@ -100,7 +101,7 @@ function sphereSTL(seg = 24, r = 10) {
   }, id);
   const verdict = () => page.locator('#verdict').textContent();
   const settled = () => page.waitForFunction(() =>
-    document.getElementById('toast').hidden && !document.getElementById('btn-export').disabled,
+    document.getElementById('toast').hidden && !document.getElementById('btn-step').disabled,
     { timeout: 60000 });
 
   await page.goto(APP);
@@ -109,7 +110,8 @@ function sphereSTL(seg = 24, r = 10) {
   console.log('=== 1. an empty page asks for a mesh ===');
   ok('the drop target is up', !(await page.locator('#empty').isHidden()));
   ok('and nothing can be converted or saved yet',
-    await page.locator('#btn-convert').isDisabled() && await page.locator('#btn-export').isDisabled());
+    await page.locator('#btn-convert').isDisabled() &&
+    await page.locator('#btn-step').isDisabled() && await page.locator('#btn-stl').isDisabled());
 
   console.log('\n=== 2. it counts what is open ===');
   await page.setInputFiles('#file-input', boxPath);
@@ -143,7 +145,7 @@ function sphereSTL(seg = 24, r = 10) {
   console.log('\n=== 4. the file that comes out is the solid ===');
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.click('#btn-export')
+    page.click('#btn-stl')
   ]);
   const saved = path.join(dir, download.suggestedFilename());
   await download.saveAs(saved);
@@ -156,7 +158,46 @@ function sphereSTL(seg = 24, r = 10) {
     Math.abs(P.volumeOf(back) - 6000) < 0.01, P.volumeOf(back));
   ok('watertight on disk, not just on screen', P.watertight(back, 1e-4));
 
-  console.log('\n=== 5. going back goes back ===');
+  console.log('\n=== 5. and the file Fusion opens is a solid ===');
+  const [stepFile] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#btn-step')
+  ]);
+  const stepPath = path.join(dir, stepFile.suggestedFilename());
+  await stepFile.saveAs(stepPath);
+  ok('it comes out as a .step', stepFile.suggestedFilename() === 'rough-box.step',
+    stepFile.suggestedFilename());
+  const written = await readList('saved');
+  console.log('  ' + JSON.stringify(written));
+  ok('the panel says what went into it',
+    written.As === 'a solid body' && written.Faces === '6' && written.Edges === '12',
+    JSON.stringify(written));
+
+  // Read it the way a solid modeller would, knowing nothing about the app.
+  const text = fs.readFileSync(stepPath, 'utf8');
+  const entities = V.parse(text);
+  ok('it is part 21 with every reference resolved',
+    /^ISO-10303-21;/.test(text) &&
+    V.references(entities).filter(r => !entities.has(r)).length === 0);
+  ok('and holds one closed shell as a solid body',
+    /MANIFOLD_SOLID_BREP/.test(text) && /CLOSED_SHELL/.test(text) &&
+    !/OPEN_SHELL/.test(text));
+  const solid = V.solidOf(entities);
+  let once = 0, sameWay = 0;
+  solid.edgeUse.forEach(senses => {
+    if (senses.length !== 2) once++;
+    else if (senses[0] === senses[1]) sameWay++;
+  });
+  ok('six faces, twelve edges, each used once from either side',
+    solid.faces.length === 6 && solid.edgeUse.size === 12 && once === 0 && sameWay === 0,
+    solid.faces.length + ' faces, ' + once + ' loose, ' + sameWay + ' agreeing');
+  const shape = V.measure(solid);
+  ok('every corner on the plane of its face', shape.offPlane < 1e-9, shape.offPlane);
+  ok('outlines the right way round', shape.backwards === 0, shape.backwards);
+  ok('and the faces enclose the box that went in (' + shape.volume.toFixed(1) + ' mm3)',
+    Math.abs(shape.volume - 6000) < 0.01, shape.volume);
+
+  console.log('\n=== 6. going back goes back ===');
   await page.click('#btn-reset');
   await settled();
   const again = await readList('facts');
@@ -164,7 +205,7 @@ function sphereSTL(seg = 24, r = 10) {
   ok('the rebuild is put away', await page.locator('#report-block').isHidden());
   ok('and Convert is offered again', !(await page.locator('#btn-convert').isDisabled()));
 
-  console.log('\n=== 6. a tolerance nobody should use is refused, not obeyed ===');
+  console.log('\n=== 7. a tolerance nobody should use is refused, not obeyed ===');
   // A box is a box at any tolerance, so the mesh that shows this is the one
   // that has something to lose: at four millimetres of slack a sphere would
   // come back seven per cent smaller than it went in.
@@ -186,7 +227,7 @@ function sphereSTL(seg = 24, r = 10) {
     untouched.Triangles === roundTriangles && await page.locator('#report-block').isHidden(),
     untouched.Triangles + ' of ' + roundTriangles);
 
-  console.log('\n=== 7. a scan is called a scan ===');
+  console.log('\n=== 8. a scan is called a scan ===');
   await page.reload();
   await page.waitForSelector('#btn-open');
   await page.setInputFiles('#file-input', ballPath);
@@ -196,7 +237,7 @@ function sphereSTL(seg = 24, r = 10) {
   ok('a sphere is not sold as a prismatic part', /never a prismatic part/.test(scan), scan);
   ok('and it is still offered, not blocked', !(await page.locator('#btn-convert').isDisabled()));
 
-  console.log('\n=== 8. the sample part is there to try ===');
+  console.log('\n=== 9. the sample part is there to try ===');
   await page.reload();
   await page.waitForSelector('#btn-open');
   await page.click('[data-demo]');

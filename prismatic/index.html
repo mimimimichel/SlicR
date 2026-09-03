@@ -4,8 +4,8 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <meta name="color-scheme" content="dark"/>
-<title>Prismatic — mesh to solid</title>
-<meta name="description" content="Turn a triangle mesh back into a prismatic solid in the browser: the flat faces are found and fitted to one exact plane each, the corners are put back where their planes cross, and every face is rebuilt from its outline. Nothing is uploaded."/>
+<title>Prismatic — mesh to STEP solid</title>
+<meta name="description" content="Turn a triangle mesh back into a prismatic solid in the browser and save it as STEP: the flat faces are found and fitted to one exact plane each, the corners are put back where their planes cross, and every face is rebuilt from its outline. Fusion opens the result as a solid body you can edit. Nothing is uploaded."/>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236366f1'/%3E%3Cpath d='M16 5l10 6v10l-10 6-10-6V11z' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round' opacity='.95'/%3E%3Cpath d='M16 5v22M6 11l10 6 10-6' fill='none' stroke='white' stroke-width='1.4' opacity='.5'/%3E%3C/svg%3E"/>
 <link rel="stylesheet" href="../styles/main.css"/>
 <link rel="stylesheet" href="style.css"/>
@@ -22,7 +22,6 @@
   <div class="pr-actions">
     <button class="pr-btn" id="btn-open" type="button">Open</button>
     <button class="pr-btn primary" id="btn-convert" type="button" disabled>Convert</button>
-    <button class="pr-btn" id="btn-export" type="button" disabled>Save STL</button>
   </div>
 </header>
 
@@ -36,6 +35,8 @@
         <p>An STL, OBJ or 3MF of a part that came out of CAD. Its flat faces are
            found, fitted to one exact plane each, and rebuilt from their outlines —
            the prismatic conversion, the same idea as Convert Mesh in Fusion.</p>
+        <p>Save it as STEP and Fusion opens it as a solid body: faces you can
+           click, fillet, sketch on and cut.</p>
         <p class="pr-quiet">Nothing is uploaded. The mesh never leaves this machine.</p>
         <div class="pr-empty-row">
           <button class="pr-btn primary" id="btn-open-2" type="button">Choose a file</button>
@@ -95,6 +96,21 @@
       </section>
 
       <section class="pr-block">
+        <h2>Save</h2>
+        <div class="pr-row">
+          <button class="pr-btn primary" id="btn-step" type="button" disabled>STEP</button>
+          <button class="pr-btn" id="btn-stl" type="button" disabled>STL</button>
+        </div>
+        <p class="pr-hint">
+          <b>STEP</b> is the one to open in Fusion: it carries the faces, their
+          edges and the solid they bound, so what arrives is a body you can
+          click a face of, fillet, sketch on and cut. <b>STL</b> is the mesh
+          again, for printing. Saving STEP converts first if you have not.
+        </p>
+        <dl class="pr-facts" id="saved"></dl>
+      </section>
+
+      <section class="pr-block">
         <h2>View</h2>
         <div class="pr-field">
           <label for="opt-shade">Colour by face</label>
@@ -107,11 +123,13 @@
       </section>
 
       <p class="pr-note">
-        What comes out is a triangle mesh, not a B-rep — there is no CAD kernel
-        in a web page. What it is instead is a mesh whose flat faces are flat to
-        the last decimal, whose edges are straight, and which usually holds a
-        fraction of the triangles it started with. Anything curved is faceted to
-        the deviation above, so a scan or a sculpt is better left alone.
+        Every face here is a plane and every edge a straight line, which is what
+        prismatic means. There is no CAD kernel in a web page to recognise that
+        a ring of faces was once a cylinder, so anything curved arrives as many
+        flat faces at the deviation above — a scan or a sculpt is better left
+        alone. Within that, the STEP file carries a real solid: shared edges, a
+        closed shell, faces you can select. It is not a mesh wearing a CAD
+        extension.
       </p>
 
     </div>
@@ -124,6 +142,7 @@
 <script src="../js/vendor/earcut.js"></script>
 <script src="../js/slicer/loaders.js"></script>
 <script src="prismatic.js"></script>
+<script src="step.js"></script>
 <script src="viewer.js"></script>
 <script src="app.js"></script>
 </body>

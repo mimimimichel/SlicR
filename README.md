@@ -85,7 +85,8 @@ node test-gcodecheck.js          # 35 injected faults the checker must catch
 node test-profiles.js            # all 43 profiles with every feature on
 
 node test-prismatic.js           # mesh to solid, on shapes whose volume is known
-node test-ui-prismatic.js        # and the app around it, down to the saved STL
+node test-step.js                # and the STEP written from it, read back cold
+node test-ui-prismatic.js        # the app around both, down to the saved files
 ```
 
 ### Measured against a reference
@@ -114,9 +115,23 @@ do with slicing. It turns a triangle mesh back into a solid the way Fusion's
 *Convert Mesh > Prismatic* does: an STL is a solid that was chopped up, so the
 flat faces are found and each fitted to one exact plane, every vertex is moved
 onto the corner where its planes cross, and each face is re-triangulated from
-its outline instead of keeping the fan of facets. In goes an STL, OBJ or 3MF;
-out comes an STL whose flat faces are flat to the last decimal, whose edges are
-straight, and which usually holds a fraction of the triangles it arrived with.
+its outline instead of keeping the fan of facets. In goes an STL, OBJ or 3MF.
+
+Out comes **STEP**, which is the point of it. A mesh is a bag of triangles that
+every program opening it has to guess at; a STEP file says here is a point, here
+is the edge between two points, here is the plane, here is the face those edges
+bound, and here is the closed shell they make. Fusion opens that as a solid
+body — faces you can click, fillet, sketch on and cut — so the part is editable
+again rather than merely printable. STL comes out too, for printing.
+
+Writing that file is not a second conversion: the faces, their planes and their
+loops all fall out of the rebuild already. What takes the care is that the edges
+are *shared* — one edge between the two faces that meet along it, traversed the
+other way by the second — and that outlines run anticlockwise about the face
+normal while holes run the other way. Get either wrong and what arrives in
+Fusion is a heap of surfaces that will not take a fillet. A mesh with a hole in
+it is not a solid and is not written as one: it comes out as surfaces, said so
+in the file and in the app, which Fusion will offer to stitch.
 
 ```
 python3 -m http.server 8099
@@ -136,6 +151,14 @@ measured against the facets it replaces, and the finished body against the
 volume and the seams of the one it came from; what does not add up comes back
 untouched with the reason. A mesh that was never prismatic — a scan, a sculpt —
 is named as one before you press anything.
+
+`test-step.js` reads the written file back knowing nothing about the code that
+wrote it — its own part 21 parser, then the questions a solid modeller asks. Is
+every reference resolved, is every edge used exactly twice and in opposite
+directions, does every loop close, do the corners of a face lie on the plane it
+claims, do the outlines turn the right way — and then the one that catches
+whatever the others missed: what volume do those faces enclose, computed from
+the file alone. For a 20 x 30 x 10 box it is 6000.000 mm3.
 
 There is no B-rep kernel in a web page, so what comes out is still a mesh.
 Anything genuinely curved is faceted to the deviation you set, which is what
@@ -175,6 +198,7 @@ js/slicer/
 js/vendor/            clipper, earcut, three.js
 prismatic/            the mesh-to-solid app, on its own
   prismatic.js        the faces found, fitted, and rebuilt
+  step.js             those faces written out as a STEP solid
   viewer.js           its viewport
   app.js              its UI
 android/              the WebView wrapper

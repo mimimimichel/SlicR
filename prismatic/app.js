@@ -22,6 +22,7 @@
     current: null,     // what is on screen: the source, or the rebuild
     look: null,        // the last inspection of `current`
     report: null,
+    saved: null,
     busy: false,
     pending: null
   };
@@ -149,7 +150,8 @@
     // conversion that is no longer the mesh that was opened.
     el('facts-head').textContent = state.report ? 'The rebuilt solid' : 'The mesh';
     el('btn-convert').disabled = !found.triangles || !!state.report;
-    el('btn-export').disabled = !found.triangles;
+    el('btn-step').disabled = !found.triangles;
+    el('btn-stl').disabled = !found.triangles;
     el('views').hidden = !found.triangles;
   }
 
@@ -157,7 +159,7 @@
   // Doing it
   // ---------------------------------------------------------------------------
 
-  function convert() {
+  function convert(then) {
     if (!state.current || state.busy) return;
     state.busy = true;
     toast('Rebuilding the solid…', null, true);
@@ -173,14 +175,18 @@
       state.busy = false;
       if (!report.ok) {
         // Nothing is replaced on the screen either: what it says it did and
-        // what it did have to be the same thing.
+        // what it did have to be the same thing. And nothing is saved, since
+        // there is no solid to save.
         toast('Left alone. ' + report.reason, 'bad');
         return;
       }
       state.report = report;
       state.current = report.positions;
       hideToast();
-      look(function () { showReport(report); });
+      look(function () {
+        showReport(report);
+        if (typeof then === 'function') then();
+      });
       toast('Rebuilt: ' + count(report.trianglesBefore) + ' triangles → ' + count(report.triangles) +
         ', across ' + count(report.faces) + ' faces.', 'good');
     }, 40);
@@ -197,6 +203,7 @@
       report.keptFacets ? ['Kept their facets', count(report.keptFacets)] : null,
       ['Volume held to', (report.volumeError * 100).toFixed(3) + '%'],
       ['Furthest a vertex moved', mm(report.moved)],
+      ['Corners off their planes', report.flatness < 1e-9 ? 'none' : mm(report.flatness)],
       ['Watertight', report.watertight ? 'yes' : 'no']
     ]);
     el('report-block').hidden = false;
@@ -206,7 +213,9 @@
     if (!state.source) return;
     state.current = state.source;
     state.report = null;
+    state.saved = null;
     el('report-block').hidden = true;
+    el('saved').innerHTML = '';
     hideToast();
     look();
   }
@@ -226,6 +235,7 @@
     state.report = null;
     state.framed = false;
     el('report-block').hidden = true;
+    el('saved').innerHTML = '';
     el('empty').hidden = true;
     el('file-name').textContent = name;
     look();
@@ -264,11 +274,12 @@
     return new Blob([buf], { type: 'model/stl' });
   }
 
-  function save() {
-    if (!state.current) return;
-    var base = (state.name || 'mesh').replace(/\.(stl|obj|3mf)$/i, '');
-    var name = base + (state.report ? '-solid' : '') + '.stl';
-    var url = URL.createObjectURL(stl(state.current, name));
+  function baseName() {
+    return (state.name || 'mesh').replace(/\.(stl|obj|3mf|step|stp)$/i, '');
+  }
+
+  function download(blob, name) {
+    var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
     a.download = name;
@@ -276,7 +287,58 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-    toast('Saved ' + name + '.', 'good');
+  }
+
+  function saveSTL() {
+    if (!state.current) return;
+    var name = baseName() + (state.report ? '-solid' : '') + '.stl';
+    download(stl(state.current, name), name);
+    toast('Saved ' + name + ' — the mesh, for printing.', 'good');
+  }
+
+  /**
+   * The one that was the point of all this. A mesh has to be converted before
+   * there is a solid to write, so pressing Save STEP on a mesh that has not
+   * been converted converts it first and shows what that did, rather than
+   * refusing or — worse — quietly writing the triangles out as faces.
+   */
+  function saveSTEP() {
+    if (!state.current || state.busy) return;
+    if (!state.report) { convert(saveSTEP); return; }
+    var name = baseName() + '.step';
+    var file;
+    try {
+      file = window.PrismaticStep.write(state.report.brep, { name: baseName() });
+    } catch (e) {
+      toast('The STEP file could not be written: ' + (e.message || e), 'bad');
+      return;
+    }
+    state.saved = file;
+    download(new Blob([file.text], { type: 'application/step' }), name);
+    showSaved(file, name);
+
+    if (!file.solid) {
+      toast('Saved ' + name + ', but as surfaces rather than a solid: the mesh has ' +
+        file.looseEdges + ' open edge' + (file.looseEdges === 1 ? '' : 's') +
+        ', so there is no inside to it. Fusion will offer to stitch them.', 'bad');
+    } else {
+      toast('Saved ' + name + ' — ' + count(file.faces) + ' faces over ' + count(file.edges) +
+        ' edges, as ' + (file.bodies === 1 ? 'one solid body' : count(file.bodies) + ' solid bodies') +
+        '. Fusion opens it as a body you can edit.', 'good');
+    }
+  }
+
+  function showSaved(file, name) {
+    facts(el('saved'), [
+      ['Written', name, true],
+      ['As', file.solid
+        ? (file.bodies === 1 ? 'a solid body' : count(file.bodies) + ' solid bodies')
+        : 'surfaces — the mesh is open'],
+      ['Faces', count(file.faces)],
+      ['Edges', count(file.edges)],
+      ['Corners', count(file.vertices)],
+      file.cavities ? ['Enclosed cavities', count(file.cavities)] : null
+    ]);
   }
 
   // ---------------------------------------------------------------------------
@@ -367,9 +429,10 @@
     document.querySelector('[data-demo]').onclick = function () {
       open(sample(), 'bracket.stl');
     };
-    el('btn-convert').onclick = convert;
+    el('btn-convert').onclick = function () { convert(); };
     el('btn-reset').onclick = reset;
-    el('btn-export').onclick = save;
+    el('btn-step').onclick = saveSTEP;
+    el('btn-stl').onclick = saveSTL;
 
     var settle = null;
     ['opt-angle', 'opt-deviation', 'opt-square'].forEach(function (id) {
@@ -410,6 +473,7 @@
       if (ev.target && /input|textarea/i.test(ev.target.tagName)) return;
       if (ev.key === 'o') el('file-input').click();
       else if (ev.key === 'Enter' && !el('btn-convert').disabled) convert();
+      else if (ev.key === 's' && !el('btn-step').disabled) saveSTEP();
       else if (ev.key === 'f') state.viewer.frame();
     });
   }

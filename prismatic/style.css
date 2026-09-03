@@ -148,6 +148,10 @@ body {
 .pr-row .pr-btn { flex: 1 1 auto; }
 
 .pr-note { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); padding: 16px 0 0; }
+.pr-hint { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); padding: 10px 0 0; }
+.pr-hint b { color: var(--text-secondary); font-weight: 600; }
+.pr-facts:empty { display: none; }
+#saved { margin-top: 12px; }
 
 /* ---- Empty state ---------------------------------------------------- */
 

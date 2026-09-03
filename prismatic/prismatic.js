@@ -755,12 +755,14 @@
     }
 
     var out = [];
+    var groups = [];
     var built = 0;
     for (i = 0; i < outers.length; i++) {
       var ring = outers[i];
       var xy = ring.xy.slice(), ids = ring.ids.slice(), starts = [];
       var kids = ring.holes || [];
       ring.holes = null;
+      groups.push({ outer: ring.ids.slice(), holes: kids.map(function (k) { return k.ids.slice(); }) });
       for (var h = 0; h < kids.length; h++) {
         starts.push(xy.length / 2);
         for (var c = 0; c < kids[h].xy.length; c++) xy.push(kids[h].xy[c]);
@@ -788,7 +790,9 @@
     // where they ended. If it does not, the facets are the safer answer.
     if (was > 0 && Math.abs(built - was) / was > o.maxFaceError) return null;
     if (!outlineIntact(rings, out, V)) return null;
-    return out;
+    // The triangles are what a mesh needs; the loops are what a solid needs.
+    // They come out of the same work and describe the same face.
+    return { tris: out, groups: groups };
   }
 
   /**
@@ -890,7 +894,7 @@
     for (f = 0; f < seg.count; f++) {
       if (built[f]) {
         rebuilt++;
-        for (i = 0; i < built[f].length; i++) out.push(built[f][i]);
+        for (i = 0; i < built[f].tris.length; i++) out.push(built[f].tris[i]);
       } else {
         kept++;
         for (i = seg.start[f]; i < seg.start[f + 1]; i++) {
@@ -899,7 +903,7 @@
         }
       }
     }
-    return { indices: out, rebuilt: rebuilt, keptFacets: kept };
+    return { indices: out, rebuilt: rebuilt, keptFacets: kept, built: built };
   }
 
   /**
@@ -922,9 +926,10 @@
 
     for (f = 0; f < seg.count; f++) {
       if (built[f]) {
-        for (i = 0; i < built[f].length; i += 3) {
+        var tris = built[f].tris;
+        for (i = 0; i < tris.length; i += 3) {
           for (k = 0; k < 3; k++) {
-            a = built[f][i + k]; b = built[f][i + (k + 1) % 3];
+            a = tris[i + k]; b = tris[i + (k + 1) % 3];
             if (a !== b) note(a, b, f);
           }
         }
@@ -944,6 +949,89 @@
     if (!guilty.length) return false;
     for (var g = 0; g < guilty.length; g++) if (!facets[guilty[g]]) fallback(guilty[g]);
     return true;
+  }
+
+  /**
+   * The same conversion, said the way a solid modeller says it: a list of
+   * points, and a list of planar faces each bounded by loops of those points.
+   * That is not a second algorithm — it is the loops the rebuild already found
+   * and triangulated, kept instead of thrown away, so the solid and the mesh
+   * are the same answer written twice.
+   *
+   * The plane of each face is fitted again here, to the corners the face
+   * actually ended up with rather than to the facets it was grown from. It is
+   * the same plane to within the noise, but a solid is checked against its
+   * plane by whoever reads it, so the one that fits the corners is the one to
+   * write down. `flatness` is how far off it any corner still sits.
+   *
+   * A face the rebuild handed back to its facets comes through as one small
+   * triangular face per facet — still planar, still sharing its edges with its
+   * neighbours, just not simplified.
+   */
+  function brepOf(mesh, seg, faces) {
+    var out = [];
+    var flatness = 0;
+
+    function planeOf(loop) {
+      // Newell's method: exact for a planar loop, and stable when it is not.
+      var nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0;
+      for (var i = 0; i < loop.length; i++) {
+        var a = loop[i], b = loop[(i + 1) % loop.length];
+        nx += (mesh.vy[a] - mesh.vy[b]) * (mesh.vz[a] + mesh.vz[b]);
+        ny += (mesh.vz[a] - mesh.vz[b]) * (mesh.vx[a] + mesh.vx[b]);
+        nz += (mesh.vx[a] - mesh.vx[b]) * (mesh.vy[a] + mesh.vy[b]);
+        cx += mesh.vx[a]; cy += mesh.vy[a]; cz += mesh.vz[a];
+      }
+      var len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (!(len > 0)) return null;
+      nx /= len; ny /= len; nz /= len;
+      var n = loop.length;
+      return { x: nx, y: ny, z: nz, d: (nx * cx + ny * cy + nz * cz) / n };
+    }
+
+    function add(plane, loops) {
+      for (var l = 0; l < loops.length; l++) {
+        for (var i = 0; i < loops[l].length; i++) {
+          var v = loops[l][i];
+          var gap = Math.abs(mesh.vx[v] * plane.x + mesh.vy[v] * plane.y + mesh.vz[v] * plane.z - plane.d);
+          if (gap > flatness) flatness = gap;
+        }
+      }
+      out.push({ x: plane.x, y: plane.y, z: plane.z, d: plane.d, loops: loops });
+    }
+
+    for (var f = 0; f < seg.count; f++) {
+      var made = faces.built[f];
+      if (made) {
+        for (var g = 0; g < made.groups.length; g++) {
+          var group = made.groups[g];
+          var fitted = planeOf(group.outer);
+          var known = seg.planes[f];
+          // Newell turns with the loop, so a well-wound outer loop already
+          // agrees with the face; if it does not, the loop is degenerate and
+          // the plane the face was grown on is the safer one.
+          if (!fitted || fitted.x * known.x + fitted.y * known.y + fitted.z * known.z < 0.99) {
+            fitted = { x: known.x, y: known.y, z: known.z, d: known.d };
+          }
+          add(fitted, [group.outer].concat(group.holes));
+        }
+        continue;
+      }
+      for (var m = seg.start[f]; m < seg.start[f + 1]; m++) {
+        var t = seg.list[m];
+        var tri = [mesh.ids[t * 3], mesh.ids[t * 3 + 1], mesh.ids[t * 3 + 2]];
+        var own = planeOf(tri);
+        if (own) add(own, [tri]);
+      }
+    }
+
+    var vertices = new Float64Array(mesh.vertices * 3);
+    for (var v = 0; v < mesh.vertices; v++) {
+      vertices[v * 3] = mesh.vx[v];
+      vertices[v * 3 + 1] = mesh.vy[v];
+      vertices[v * 3 + 2] = mesh.vz[v];
+    }
+    return { vertices: vertices, faces: out, flatness: flatness };
   }
 
   function keepEveryVertex(mesh, seg, f, corner) {
@@ -1242,6 +1330,7 @@
 
     var faces = rebuild(mesh, seg, o);
     var out = faces.indices;
+    var brep = brepOf(mesh, seg, faces);
 
     var result = new Float32Array(out.length * 3);
     var written = 0;
@@ -1283,7 +1372,12 @@
       volumeBefore: before,
       volumeError: error,
       watertight: sealed,
-      watertightBefore: sealedBefore
+      watertightBefore: sealedBefore,
+      // The same solid, as faces and loops rather than as triangles — what a
+      // CAD file is written from.
+      brep: brep,
+      flatness: brep.flatness,
+      brepFaces: brep.faces.length
     };
 
     if (!written) return reject(positions, 'The rebuild came back empty.', before, report);
