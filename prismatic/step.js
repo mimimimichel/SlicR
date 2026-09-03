@@ -226,7 +226,7 @@
     // exactly where its planes cross. A recognised cylinder is fitted rather
     // than solved, so it carries its own small slack, and the file has to own
     // up to whichever is larger.
-    var tolerance = Math.min(1e-4, Math.max(1e-7, Math.max(brep.flatness || 0, brep.slack || 0) * 4));
+    var tolerance = Math.min(1e-3, Math.max(1e-7, Math.max(brep.flatness || 0, brep.slack || 0) * 4));
     var uncertainty = put('UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(' + num(tolerance) + '),#' +
       lengthUnit + ',' + text('distance_accuracy_value') + ',' + text('confusion accuracy') + ')');
     var geometry = put('(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#' +
@@ -273,8 +273,8 @@
       // surface's own seam rather than on anything of its own, so there is no
       // outer boundary to name — the face is the whole way round. A patch that
       // does not has one like any other face.
-      var periodic = (s.type === 'cylinder' || s.type === 'cone' || s.type === 'sphere') &&
-        face.loops.length > 1;
+      var periodic = (s.type === 'cylinder' || s.type === 'cone' || s.type === 'sphere' ||
+        s.type === 'torus') && face.loops.length > 1;
 
       var bounds = [];
       face.loops.forEach(function (loop, index) {
@@ -294,7 +294,37 @@
         // same surface with the material on the other side of it.
         sense = s.outward;
       } else if (s.type === 'sphere') {
-        surfaceId = put("SPHERICAL_SURFACE(''," + '#' + placement(s.centre, [0, 0, 1]) + ',' + num(s.radius) + ')');
+        // A sphere is parameterised from its poles, where every meridian meets
+        // and the parameters stop meaning much. A patch that sits on one is
+        // awkward for whoever reads the file and awkward to draw; a patch that
+        // straddles the equator is neither. Since the axis of a sphere is
+        // arbitrary, it is chosen to put the patch on the equator — except for
+        // the two halves of a whole ball, which have to keep the axis their
+        // shared seam runs about.
+        var axis = [0, 0, 1];
+        if (!face.seam) {
+          var mean = [0, 0, 0], n = 0;
+          face.points.forEach(function (loop) {
+            loop.forEach(function (v) {
+              mean[0] += brep.vertices[v * 3] - s.centre[0];
+              mean[1] += brep.vertices[v * 3 + 1] - s.centre[1];
+              mean[2] += brep.vertices[v * 3 + 2] - s.centre[2];
+              n++;
+            });
+          });
+          if (n) {
+            var m = unit(mean);
+            if (Math.abs(dot(m, axis)) > 0.5) axis = across(m);
+          }
+        }
+        surfaceId = put("SPHERICAL_SURFACE(''," + '#' + placement(s.centre, axis) + ',' + num(s.radius) + ')');
+        sense = s.outward;
+      } else if (s.type === 'torus') {
+        surfaceId = put("TOROIDAL_SURFACE(''," + '#' + placement(s.centre, s.axis) + ',' +
+          num(s.major) + ',' + num(s.minor) + ')');
+        // A doughnut faces away from the ring it is wrapped around; the fillet
+        // cut out of a corner is the same surface with the material on the
+        // other side of it.
         sense = s.outward;
       } else if (s.type === 'cone') {
         // Placed where the cone has a radius worth quoting rather than at the
@@ -343,7 +373,7 @@
       "(''," + '(' + items.join(',') + '),#' + geometry + ')');
     put('SHAPE_DEFINITION_REPRESENTATION(#' + shape + ',#' + representation + ')');
 
-    var curves = { plane: 0, cylinder: 0, cone: 0, sphere: 0 };
+    var curves = { plane: 0, cylinder: 0, cone: 0, sphere: 0, torus: 0 };
     brep.faces.forEach(function (f) { curves[f.surface.type]++; });
     var circles = brep.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
 

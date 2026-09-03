@@ -829,6 +829,15 @@
     return sound;
   }
 
+  /** The area of one facet, where its corners are now. */
+  function facetArea(mesh, t) {
+    var a = mesh.ids[t * 3], b = mesh.ids[t * 3 + 1], c = mesh.ids[t * 3 + 2];
+    var ux = mesh.vx[b] - mesh.vx[a], uy = mesh.vy[b] - mesh.vy[a], uz = mesh.vz[b] - mesh.vz[a];
+    var wx = mesh.vx[c] - mesh.vx[a], wy = mesh.vy[c] - mesh.vy[a], wz = mesh.vz[c] - mesh.vz[a];
+    var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    return Math.sqrt(nx * nx + ny * ny + nz * nz) / 2;
+  }
+
   function reverseKey(key, V) {
     var a = Math.floor(key / V);
     return (key - a * V) * V + a;
@@ -879,8 +888,15 @@
           if (!ring) { lost = true; break; }
           reduced.push(ring);
         }
+        // Measured on the facets as they now stand, not as they arrived. The
+        // corners have been moved onto the crossings of their planes by this
+        // point, and comparing a face rebuilt from where they are against the
+        // area they used to cover reads a face that is perfectly sound as one
+        // that lost a fifth of itself — which was handing half the faces of a
+        // curved part back to their facets, one triangle each, and undoing the
+        // simplification the tolerance had just been opened up to get.
         var area = 0;
-        for (i = seg.start[f]; i < seg.start[f + 1]; i++) area += mesh.area[seg.list[i]];
+        for (i = seg.start[f]; i < seg.start[f + 1]; i++) area += facetArea(mesh, seg.list[i]);
         var tris = lost ? null : triangulateFace(reduced, area, o, earcut, V);
         built[f] = tris || null;
         if (!tris) { fallback(f); changed = true; }

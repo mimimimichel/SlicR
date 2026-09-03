@@ -81,18 +81,26 @@
    * to two percent of it, along a scale where every step is the same
    * proportional step rather than the same number of millimetres.
    */
-  var LOOSEST = -1.7;    // log10 of the deviation as a fraction of the part: 2%
-  var TIGHTEST = -4.7;   // and at the other end, two thousandths of a percent
+  var LOOSEST = -2.4;    // log10 of the deviation as a fraction of the part: 0.4%
+  var TIGHTEST = -3.9;   // and at the other end, a hundredth of a percent
+
+  // Both ends were once further out, and both were wasted. Past about half a
+  // percent of the part the rebuild stops being a rebuild — faces reach across
+  // features, the volume runs away from the mesh's own, and the conversion
+  // refuses, so the top of the gauge did nothing but refuse. Below a hundredth
+  // of a percent nothing merges that was not already merged, so the bottom of
+  // it did nothing at all. What is left is the part of the range where moving
+  // the gauge moves the answer.
 
   function gaugeToTolerances(gauge, size) {
     var t = Math.max(0, Math.min(1, gauge / 100));
     var scale = size > 0 ? size : 100;
     return {
       deviation: scale * Math.pow(10, TIGHTEST + (LOOSEST - TIGHTEST) * t),
-      // The angle opens with it, from a fifth of a degree to ten: it is the
+      // The angle opens with it, from a fifth of a degree to three: it is the
       // same question asked of the facets rather than of the corners.
       angle: Math.pow(10, Math.log(0.2) / Math.LN10 +
-        (Math.log(10) / Math.LN10 - Math.log(0.2) / Math.LN10) * t)
+        (Math.log(3) / Math.LN10 - Math.log(0.2) / Math.LN10) * t)
     };
   }
 
@@ -422,7 +430,8 @@
   function shapes(counts) {
     var said = [];
     [['plane', 'plane', 'planes'], ['cylinder', 'cylinder', 'cylinders'],
-     ['cone', 'cone', 'cones'], ['sphere', 'sphere', 'spheres']].forEach(function (kind) {
+     ['cone', 'cone', 'cones'], ['sphere', 'sphere', 'spheres'],
+     ['torus', 'torus', 'tori']].forEach(function (kind) {
       var n = counts[kind[0]];
       if (n) said.push(count(n) + ' ' + (n === 1 ? kind[1] : kind[2]));
     });

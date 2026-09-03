@@ -82,42 +82,51 @@
    * Returned smallest first, which is the one that gets asked for: the
    * direction a set of normals has least of is the axis they turn about.
    */
-  function eigen3(m) {
+  function eigenSym(m, n) {
     var a = new Float64Array(m);
-    var v = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
-    for (var sweep = 0; sweep < 32; sweep++) {
-      var off = a[1] * a[1] + a[2] * a[2] + a[5] * a[5];
+    var v = new Float64Array(n * n);
+    for (var d = 0; d < n; d++) v[d * n + d] = 1;
+    for (var sweep = 0; sweep < 64; sweep++) {
+      var off = 0;
+      for (var i = 0; i < n; i++) for (var j = i + 1; j < n; j++) off += a[i * n + j] * a[i * n + j];
       if (off < 1e-30) break;
-      for (var p = 0; p < 2; p++) {
-        for (var q = p + 1; q < 3; q++) {
-          var apq = a[p * 3 + q];
+      for (var p = 0; p < n - 1; p++) {
+        for (var q = p + 1; q < n; q++) {
+          var apq = a[p * n + q];
           if (Math.abs(apq) < 1e-300) continue;
-          var app = a[p * 3 + p], aqq = a[q * 3 + q];
-          var theta = (aqq - app) / (2 * apq);
+          var theta = (a[q * n + q] - a[p * n + p]) / (2 * apq);
           var t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
           var c = 1 / Math.sqrt(t * t + 1), s = t * c;
-          for (var k = 0; k < 3; k++) {
-            var akp = a[k * 3 + p], akq = a[k * 3 + q];
-            a[k * 3 + p] = c * akp - s * akq;
-            a[k * 3 + q] = s * akp + c * akq;
+          for (var k = 0; k < n; k++) {
+            var akp = a[k * n + p], akq = a[k * n + q];
+            a[k * n + p] = c * akp - s * akq;
+            a[k * n + q] = s * akp + c * akq;
           }
-          for (var k2 = 0; k2 < 3; k2++) {
-            var apk = a[p * 3 + k2], aqk = a[q * 3 + k2];
-            a[p * 3 + k2] = c * apk - s * aqk;
-            a[q * 3 + k2] = s * apk + c * aqk;
-            var vkp = v[k2 * 3 + p], vkq = v[k2 * 3 + q];
-            v[k2 * 3 + p] = c * vkp - s * vkq;
-            v[k2 * 3 + q] = s * vkp + c * vkq;
+          for (var k2 = 0; k2 < n; k2++) {
+            var apk = a[p * n + k2], aqk = a[q * n + k2];
+            a[p * n + k2] = c * apk - s * aqk;
+            a[q * n + k2] = s * apk + c * aqk;
+            var vkp = v[k2 * n + p], vkq = v[k2 * n + q];
+            v[k2 * n + p] = c * vkp - s * vkq;
+            v[k2 * n + q] = s * vkp + c * vkq;
           }
         }
       }
     }
-    var order = [0, 1, 2].sort(function (x, y) { return a[x * 3 + x] - a[y * 3 + y]; });
+    var order = [];
+    for (var o = 0; o < n; o++) order.push(o);
+    order.sort(function (x, y) { return a[x * n + x] - a[y * n + y]; });
     return {
-      values: order.map(function (i) { return a[i * 3 + i]; }),
-      vectors: order.map(function (i) { return [v[i], v[3 + i], v[6 + i]]; })
+      values: order.map(function (i) { return a[i * n + i]; }),
+      vectors: order.map(function (i) {
+        var out = [];
+        for (var r = 0; r < n; r++) out.push(v[r * n + i]);
+        return out;
+      })
     };
   }
+
+  function eigen3(m) { return eigenSym(m, 3); }
 
   function norm(v) {
     var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -146,11 +155,28 @@
     this.sd = 0;                      // sum of w d
     this.m4 = new Float64Array(16);   // sum of w [n,1][n,1]'
     this.b4 = new Float64Array(4);    // sum of w d [n,1]
+    this.m6 = new Float64Array(36);   // sum of w u u', u = [p x n, -n]
+    this.seen = null;                 // one facet, kept for its side
     this.faces = [];
   }
 
-  /** One more tangent plane, weighted by how much surface it speaks for. */
-  Group.prototype.add = function (n, d, w, face) {
+  /**
+   * One more tangent plane, weighted by how much surface it speaks for, and
+   * with it the sixth-order moment that finds an axis.
+   *
+   * That last one is worth a word. Every surface made by turning something
+   * about an axis — a cylinder, a cone, a sphere, a torus — has the property
+   * that the normal at every point of it meets that axis. Written down, "the
+   * line through p along n meets the line through q along a" is
+   *
+   *     (p x n).a - n.(a x q) = 0
+   *
+   * which is linear in a and in the moment a x q together. So the axis of
+   * whatever this is falls out as the null direction of one six by six matrix,
+   * accumulated a facet at a time like everything else here — and it is the
+   * same matrix whatever kind of surface it turns out to be.
+   */
+  Group.prototype.add = function (n, d, w, face, at) {
     this.weight += w;
     this.sd += w * d;
     var e = [n[0], n[1], n[2], 1];
@@ -162,6 +188,20 @@
     for (var a = 0; a < 4; a++) {
       this.b4[a] += w * d * e[a];
       for (var b = 0; b < 4; b++) this.m4[a * 4 + b] += w * e[a] * e[b];
+    }
+    if (at) {
+      // p only enters as p x n, which is the same for every point along the
+      // normal, so where on it the facet was measured does not matter.
+      var u = [
+        at[1] * n[2] - at[2] * n[1],
+        at[2] * n[0] - at[0] * n[2],
+        at[0] * n[1] - at[1] * n[0],
+        -n[0], -n[1], -n[2]
+      ];
+      for (var x = 0; x < 6; x++) {
+        for (var y = 0; y < 6; y++) this.m6[x * 6 + y] += w * u[x] * u[y];
+      }
+      if (!this.seen || w > this.seen.w) this.seen = { p: at.slice(), n: n.slice(), w: w };
     }
     if (face !== undefined) this.faces.push(face);
   };
@@ -175,9 +215,31 @@
     g.sd = this.sd;
     g.m4 = new Float64Array(this.m4);
     g.b4 = new Float64Array(this.b4);
+    g.m6 = new Float64Array(this.m6);
+    g.seen = this.seen ? { p: this.seen.p.slice(), n: this.seen.n.slice(), w: this.seen.w } : null;
     g.faces = this.faces.slice();
     return g;
   };
+
+  /**
+   * The axis this thing was turned about, if it was turned about one: the
+   * direction and moment that satisfy every normal at once.
+   */
+  function axisOfRevolution(g) {
+    if (!(g.weight > 0)) return null;
+    var e = eigenSym(g.m6, 6);
+    var v = e.vectors[0];
+    var a = [v[0], v[1], v[2]];
+    var len = Math.sqrt(dot(a, a));
+    if (!(len > 1e-6)) return null;          // no direction in it: a sphere, or a plane
+    a = [a[0] / len, a[1] / len, a[2] / len];
+    var b = [v[3] / len, v[4] / len, v[5] / len];
+    // b is a x q with q across the axis, so q comes back as -(a x b).
+    var q = cross(a, b);
+    q = [-q[0], -q[1], -q[2]];
+    var along = dot(q, a);
+    return { axis: a, point: [q[0] - a[0] * along, q[1] - a[1] * along, q[2] - a[2] * along] };
+  }
 
   /**
    * The axis a set of normals turns about, and how far off that they are. For a
@@ -310,6 +372,9 @@
     if (s.type === 'sphere') return refineSphere(s, points);
     if (s.type === 'cylinder') return refineCylinder(s, points);
     if (s.type === 'cone') return refineCone(s, points);
+    // A torus is fitted to the points to begin with — the flat picture its axis
+    // makes of them is where the circle came from — so there is nothing here
+    // that is not already true of it.
     return s;
   }
 
@@ -408,6 +473,22 @@
    */
   function normalAt(s, p) {
     if (s.type === 'plane') return [s.x, s.y, s.z];
+    if (s.type === 'torus') {
+      // Away from the ring the tube is wrapped around, which is where the
+      // nearest point of that ring is.
+      var w = [p[0] - s.centre[0], p[1] - s.centre[1], p[2] - s.centre[2]];
+      var along = dot(w, s.axis);
+      var radial = unit([w[0] - along * s.axis[0], w[1] - along * s.axis[1], w[2] - along * s.axis[2]]);
+      if (!radial) return null;
+      var spine = [
+        s.centre[0] + radial[0] * s.major,
+        s.centre[1] + radial[1] * s.major,
+        s.centre[2] + radial[2] * s.major
+      ];
+      var out = unit([p[0] - spine[0], p[1] - spine[1], p[2] - spine[2]]);
+      if (!out) return null;
+      return s.outward ? out : [-out[0], -out[1], -out[2]];
+    }
     if (s.type === 'sphere') {
       var out = unit([p[0] - s.centre[0], p[1] - s.centre[1], p[2] - s.centre[2]]);
       return out && s.outward ? out : (out ? [-out[0], -out[1], -out[2]] : null);
@@ -446,15 +527,80 @@
    * they face: the cap faces along the axis, the bore across it.
    */
   function tangent(s, normal, points, cosTol) {
+    var want = facing(s, points);
+    if (!want) return false;
+    return dot(normal, want) >= cosTol;
+  }
+
+  /**
+   * The same question with the sign left out: does this face lie along the
+   * surface, whichever way round it happens to be written? A rebuild can leave
+   * a sliver facing backwards where the surface turns over, and a sliver facing
+   * backwards is still on the surface.
+   */
+  function alongside(s, normal, points, cosTol) {
+    var want = facing(s, points);
+    if (!want) return false;
+    return Math.abs(dot(normal, want)) >= cosTol;
+  }
+
+  function facing(s, points) {
     var mid = [0, 0, 0];
     for (var i = 0; i < points.length; i++) {
       mid[0] += points[i][0] / points.length;
       mid[1] += points[i][1] / points.length;
       mid[2] += points[i][2] / points.length;
     }
-    var want = normalAt(s, mid);
-    if (!want) return false;
-    return dot(normal, want) >= cosTol;
+    return normalAt(s, mid);
+  }
+
+  /**
+   * A doughnut, and the inside of every fillet ever cut.
+   *
+   * Once the axis is known a torus is a circle again: measure each point by how
+   * far it is along the axis and how far out from it, and in that flat picture
+   * the whole surface collapses to one circle — the tube's own section, sitting
+   * at the major radius. Fit that circle and there is nothing left to find.
+   *
+   * A ring torus is the only one worth writing down: when the circle comes back
+   * bigger than its distance from the axis, what has been fitted is a shape
+   * that passes through itself, which is never what anybody drew.
+   */
+  function fitTorus(g, points) {
+    if (!points || points.length < 8) return null;
+    var found = axisOfRevolution(g);
+    if (!found) return null;
+    var a = found.axis, q = found.point;
+
+    var flat = new Array(points.length);
+    for (var i = 0; i < points.length; i++) {
+      var w = [points[i][0] - q[0], points[i][1] - q[1], points[i][2] - q[2]];
+      var t = dot(w, a);
+      var rx = w[0] - t * a[0], ry = w[1] - t * a[1], rz = w[2] - t * a[2];
+      flat[i] = [Math.sqrt(rx * rx + ry * ry + rz * rz), t];
+    }
+    var circle = circleThrough(flat);
+    if (!circle) return null;
+    var major = circle.x, minor = circle.radius;
+    if (!(minor > 1e-6) || !(major > minor * 1.02)) return null;
+
+    var centre = [
+      q[0] + a[0] * circle.y,
+      q[1] + a[1] * circle.y,
+      q[2] + a[2] * circle.y
+    ];
+    var torus = {
+      type: 'torus', axis: a, centre: centre,
+      major: major, minor: minor, radius: minor, outward: true
+    };
+    // Which side the material is on, from the one facet the group kept: a
+    // doughnut faces away from the ring inside it, the fillet cut out of a
+    // corner faces towards it.
+    if (g.seen) {
+      var out = normalAt(torus, g.seen.p);
+      if (out && dot(out, g.seen.n) < 0) torus.outward = false;
+    }
+    return torus;
   }
 
   /** How far the furthest of these points sits from the surface. */
@@ -490,6 +636,13 @@
       if (along <= 0) return Math.sqrt(along * along + radial * radial);
       return Math.abs(radial * Math.cos(s.halfAngle) - along * Math.sin(s.halfAngle));
     }
+    if (s.type === 'torus') {
+      var wx = p[0] - s.centre[0], wy = p[1] - s.centre[1], wz = p[2] - s.centre[2];
+      var t = wx * s.axis[0] + wy * s.axis[1] + wz * s.axis[2];
+      var qx = wx - t * s.axis[0], qy = wy - t * s.axis[1], qz = wz - t * s.axis[2];
+      var out = Math.sqrt(qx * qx + qy * qy + qz * qz) - s.major;
+      return Math.abs(Math.sqrt(out * out + t * t) - s.minor);
+    }
     if (s.type === 'plane') {
       return Math.abs(p[0] * s.x + p[1] * s.y + p[2] * s.z - s.d);
     }
@@ -502,6 +655,71 @@
    * the normals looked most like: a shallow cone and a cylinder are hard to
    * tell apart from the normals alone and easy to tell apart from the answer.
    */
+  /**
+   * The same, but only the kind of surface it already is. Once a seed has
+   * settled what it is looking at, asking again whether it might be a sphere
+   * on every face it grows into is two thirds of the work for an answer that
+   * does not change — and it lets a long cylinder turn into a sphere halfway
+   * along itself, which is not an improvement.
+   */
+  function refit(kind, group, points, tolerance, on) {
+    var seats = on || points;
+    var s = kind === 'cylinder' ? fitCylinder(group)
+      : kind === 'cone' ? fitCone(group, seats)
+      : kind === 'sphere' ? fitSphere(group)
+      : kind === 'torus' ? fitTorus(group, seats)
+      : kind === 'plane' ? fitPlane(group, seats) : null;
+    if (!s) return null;
+    if (s.type === 'plane') {
+      var flat = deviation(s, points);
+      if (flat > tolerance) return null;
+      s.deviation = flat;
+      return s;
+    }
+    s = refine(s, seats);
+    if (!s) return null;
+    if (!(s.radius === undefined || s.radius > 1e-6)) return null;
+    var gap = deviation(s, points);
+    if (gap > tolerance) return null;
+    s.deviation = gap;
+    return s;
+  }
+
+  /**
+   * One plane through a group of facets, which is the answer far more often
+   * than it looks.
+   *
+   * A patch that is nearly flat fits a cylinder of radius a hundred, a cone of
+   * half angle eighty-six degrees and a doughnut of major radius two hundred
+   * and sixty just as well as it fits its own plane, and every one of those is
+   * a plane written by somebody who did not notice. Asked as a candidate like
+   * any other, and preferred whenever it holds, the plane wins those — and it
+   * is also how the gauge simplifies a flat wall that arrived as two hundred
+   * facets, since nothing else in here would.
+   *
+   * Least squares through the corners: the direction they spread in least.
+   */
+  function fitPlane(g, points) {
+    if (!points || points.length < 3) return null;
+    var cx = 0, cy = 0, cz = 0, n = points.length;
+    for (var i = 0; i < n; i++) { cx += points[i][0]; cy += points[i][1]; cz += points[i][2]; }
+    cx /= n; cy /= n; cz /= n;
+    var m = new Float64Array(9);
+    for (var j = 0; j < n; j++) {
+      var x = points[j][0] - cx, y = points[j][1] - cy, z = points[j][2] - cz;
+      m[0] += x * x; m[1] += x * y; m[2] += x * z;
+      m[4] += y * y; m[5] += y * z; m[8] += z * z;
+    }
+    m[3] = m[1]; m[6] = m[2]; m[7] = m[5];
+    var e = eigen3(m);
+    var a = norm(e.vectors[0]);
+    if (!a) return null;
+    // Facing the way the facets do, so that inside and outside keep their
+    // meaning further down.
+    if (dot(a, g.sn) < 0) a = [-a[0], -a[1], -a[2]];
+    return { type: 'plane', x: a[0], y: a[1], z: a[2], d: a[0] * cx + a[1] * cy + a[2] * cz };
+  }
+
   function fit(group, points, tolerance, on) {
     // Two different sets of points, for two different questions. The surface is
     // sized on the ones that are known to be on it — the mesh's own vertices,
@@ -509,7 +727,7 @@
     // the middles of the facets included, which are not on it and are where a
     // wrong answer shows.
     var seats = on || points;
-    var tries = [fitCylinder(group), fitCone(group, seats), fitSphere(group)];
+    var tries = [fitCylinder(group), fitCone(group, seats), fitSphere(group), fitTorus(group, seats)];
     var best = null, bestGap = Infinity;
     for (var i = 0; i < tries.length; i++) {
       var s = tries[i];
@@ -593,15 +811,44 @@
       if (Math.abs(Math.sqrt(dx * dx + dy * dy + dz * dz) - radius) > tolerance) return null;
     }
 
+    // Through the points is not enough: between two of them the circle stands
+    // off their chord by the sagitta, and that is a change to the part like any
+    // other. Thirty-two points round a bore leave three hundredths of a
+    // millimetre, which is the whole reason for doing this; four points round a
+    // hole leave a quarter of the radius, and a circle drawn through those four
+    // is not the hole, it is a circle that happens to touch its corners.
+    for (var g = 0; g < n - 1; g++) {
+      var ex = points[g + 1][0] - points[g][0];
+      var ey = points[g + 1][1] - points[g][1];
+      var ez = points[g + 1][2] - points[g][2];
+      var half = Math.min(1, Math.sqrt(ex * ex + ey * ey + ez * ez) / (2 * radius));
+      if (radius * (1 - Math.sqrt(1 - half * half)) > tolerance) return null;
+    }
+
     // Which way round. The chain's own turning decides it, so that an edge
     // walked from its first point to its last runs forwards along the circle.
-    var turn = 0;
+    var turn = 0, swept = 0;
     for (var s = 0; s < n - 1; s++) {
       var p0 = [points[s][0] - centre[0], points[s][1] - centre[1], points[s][2] - centre[2]];
       var p1 = [points[s + 1][0] - centre[0], points[s + 1][1] - centre[1], points[s + 1][2] - centre[2]];
-      turn += dot(cross(p0, p1), axis);
+      var turned = cross(p0, p1);
+      turn += dot(turned, axis);
+      swept += Math.atan2(dot(turned, axis), dot(p0, p1));
     }
     if (turn < 0) axis = [-axis[0], -axis[1], -axis[2]];
+
+    // A chain that comes back to where it started is written as a whole circle,
+    // and is then read as one: it has to go all the way round. Three points a
+    // third of a millimetre apart and very nearly in a line come back to where
+    // they started too, and the circle through them is six millimetres across
+    // and passes nowhere near any of the part. Its chords are within tolerance
+    // — of the three degrees of it they cover.
+    var ax = points[0][0] - points[n - 1][0];
+    var ay = points[0][1] - points[n - 1][1];
+    var az = points[0][2] - points[n - 1][2];
+    if (ax * ax + ay * ay + az * az < 1e-18 &&
+        Math.abs(Math.abs(swept) - 2 * Math.PI) > 0.05) return null;
+
     return { centre: centre, axis: axis, radius: radius };
   }
 
@@ -612,9 +859,13 @@
     fitCone: fitCone,
     fitSphere: fitSphere,
     fitArc: fitArc,
+    fitTorus: fitTorus,
+    axisOfRevolution: axisOfRevolution,
+    refit: refit,
     refine: refine,
     normalAt: normalAt,
     tangent: tangent,
+    alongside: alongside,
     distance: distance,
     deviation: deviation,
     eigen3: eigen3,

@@ -121,16 +121,29 @@ its outline instead of keeping the fan of facets. In goes an STL, OBJ or 3MF.
 It does not stop at flat faces, because a part does not. A bore arrives as
 thirty-two little planes, and left at that it leaves as thirty-two little planes
 — faces nobody can fillet, a diameter nobody can change. So the faces are looked
-at again in groups: neighbours are added one at a time while a single cylinder,
-cone or sphere still passes through all of them, and a group that ends up with
-one becomes the single face that surface makes. The ring of thirty-two segments
-around the end of it becomes one circle the same way. A plate with a hole drilled
-through it goes from 38 faces and 108 edges to **7 faces and 14 edges**; a plain
-cylinder, from 66 faces to three and two edges, both of them circles.
+at again in groups: neighbours are added one at a time while a single plane,
+cylinder, cone, sphere or torus still passes through all of them, and a group
+that ends up with one becomes the single face that surface makes. The ring of
+thirty-two segments around the end of it becomes one circle the same way. A
+plate with a hole drilled through it goes from 38 faces and 108 edges to
+**7 faces and 14 edges**; a plain cylinder, from 66 faces to three and two
+edges, both of them circles. A doughnut of 9,216 triangles comes back as **one
+toroidal surface**, and the volume it encloses is nearer the doughnut that was
+drawn than the mesh of it was.
+
+That the plane is on that list matters more than it reads. A patch that is
+nearly flat fits a cylinder of radius a hundred, a cone of half angle eighty-six
+degrees and a doughnut of major radius two hundred and sixty just as well as it
+fits its own plane, and every one of those is a plane written by somebody who did
+not notice. Asked as a candidate alongside the rest, and preferred wherever it
+holds, the plane wins those — and it is also what lets the gauge simplify a wall
+that arrived as two hundred facets, since nothing else here would.
 
 A ball is the awkward one, because nothing bounds it and a face has to be
 bounded by something. It gets cut in half the way a modeller would: one point
-on the equator, one circular edge through it, and two faces that share it.
+on the equator, one circular edge through it, and two faces that share it. A
+doughnut is cut at both of its equators, which leaves two halves each bounded by
+a wide circle and a circle round the hole.
 
 Nothing is taken on trust. Every fit is measured against every corner of the
 group *and the middle of every face in it*, and dropped if it is worse than the
@@ -214,10 +227,13 @@ round, cylinders walked over, each face triangulated in its own surface — and
 that mesh is weighed. For a 20 x 30 x 10 box it comes to 6000.000 mm3, and for
 the plate with the six millimetre bore, short by exactly the bore.
 
-What is not there is a CAD kernel, and it shows in one place: a torus. Fillets
-and rounds are not recognised, so they come through as the bands of flat faces
-they arrived as. Cylinders, cones and spheres are; anything else curved is
-faceted to the deviation you set, which is what the warning is about.
+What is not there is a CAD kernel, and it shows at the edges. Planes,
+cylinders, cones, spheres and tori are recognised — which covers a doughnut and
+most of a fillet — but a swept or lofted surface is not, and comes through as
+the band of flat faces it arrived as, faceted to the deviation you set. On a
+part whose surfaces run into one another everywhere the answer also stops
+improving past about half a percent of the part: the reader's own volume check
+is the honest one there, and it is in the suite.
 
 ## Android
 
@@ -253,7 +269,7 @@ js/slicer/
 js/vendor/            clipper, earcut, three.js
 prismatic/            the mesh-to-solid app, on its own
   prismatic.js        the faces found, fitted, and rebuilt
-  primitives.js       fitting a cylinder, a cone or a sphere to a group of them
+  primitives.js       fitting a plane, cylinder, cone, sphere or torus to them
   solid.js            those groups made into faces, and the edges they share
   step.js             the whole of it written out as a STEP solid
   viewer.js           its viewport
