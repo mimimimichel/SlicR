@@ -264,7 +264,7 @@
         // swallows the cap on the end of it, every corner of which is on the
         // cylinder because the rim is where the two meet.
         if (!P.tangent(surface, [faces[candidate].x, faces[candidate].y, faces[candidate].z],
-              samples[candidate], cosTangent)) continue;
+              samples[candidate], cosTangent, tolerance)) continue;
 
         state.group.add([faces[candidate].x, faces[candidate].y, faces[candidate].z],
           faces[candidate].d, weight[candidate], candidate, middles[candidate]);
@@ -351,7 +351,7 @@
       var kind = best.surface.type;
       var members = best.members;
       var settled = null, held = best;
-      for (var pass = 0; pass < 4 && members.length >= o.minFaces; pass++) {
+      for (var pass = 0; pass < 8 && members.length >= o.minFaces; pass++) {
         var state = startFrom(members);
         var tried = P.refit(kind, state.group, thin(state.points), tolerance, thin(state.seats));
         if (!tried) break;
@@ -359,11 +359,26 @@
         for (var c = 0; c < members.length; c++) {
           var mm = members[c];
           if (P.deviation(tried, samples[mm]) > tolerance) continue;
-          if (!P.tangent(tried, [faces[mm].x, faces[mm].y, faces[mm].z], samples[mm], cosTangent)) continue;
+          if (!P.tangent(tried, [faces[mm].x, faces[mm].y, faces[mm].z], samples[mm], cosTangent, tolerance)) continue;
           keep.push(mm);
         }
-        if (keep.length === members.length) { settled = tried; held = state; break; }
-        members = keep;
+        if (keep.length < members.length) { members = keep; continue; }
+
+        settled = tried;
+        held = state;
+
+        // And then further. Growth adds a face at a time and judges each one
+        // against the surface fitted to what it has so far, which on a big
+        // shallow cone is a surface fitted to a small piece of it: the far end
+        // is outside the tolerance of that, and the growth stops halfway with
+        // three hundred faces left over that the finished cone would have held
+        // easily. Fitted to everything it does hold, it can reach again — and
+        // again, until it stops reaching. That is where the long striped bands
+        // down the side of a turned part go.
+        var further = grow({ members: members }, kind, taken);
+        if (!further || further.members.length <= members.length) break;
+        members = further.members;
+        settled = null;
       }
       if (!settled || members.length < o.minFaces) continue;
 
@@ -399,7 +414,7 @@
           var host = groups[into];
           if (P.deviation(host.surface, samples[f2]) > tolerance) continue;
           if (!P.alongside(host.surface, [faces[f2].x, faces[f2].y, faces[f2].z],
-                samples[f2], cosTangent)) continue;
+                samples[f2], cosTangent, tolerance)) continue;
           host.group.add([faces[f2].x, faces[f2].y, faces[f2].z], faces[f2].d,
             weight[f2], f2, middles[f2]);
           Array.prototype.push.apply(host.points, samples[f2]);
@@ -814,6 +829,46 @@
   // ---------------------------------------------------------------------------
 
   /**
+   * Every corner put back onto the faces that meet there.
+   *
+   * The planar rebuild does this already, and stops at planes because planes
+   * are all it has. After recognition a corner can find itself on the rim of a
+   * cylinder, or where a cylinder runs into a doughnut, and it is still sitting
+   * where the flat facets used to cross — which, at a tolerance loose enough to
+   * be worth setting, is a tenth of a millimetre from the face it is supposed
+   * to be a corner of. A file that says that is a file whose edges are not on
+   * its faces, and no modeller will stitch it into a solid.
+   *
+   * Only the corners of the outlines are asked: everything inside a face is
+   * gone, replaced by the surface. So this is a few thousand points at most,
+   * however big the mesh was.
+   */
+  function seat(vertices, faces, tolerance) {
+    var P = root.PrismaticPrimitives;
+    var on = new Map();
+    faces.forEach(function (face) {
+      if (!face.surface) return;
+      face.loops.forEach(function (loop) {
+        loop.forEach(function (v) {
+          var list = on.get(v);
+          if (!list) { list = []; on.set(v, list); }
+          if (list.indexOf(face.surface) < 0) list.push(face.surface);
+        });
+      });
+    });
+
+    var moved = null;
+    on.forEach(function (surfaces, v) {
+      var at = [vertices[v * 3], vertices[v * 3 + 1], vertices[v * 3 + 2]];
+      var put = P.pull(surfaces, at, tolerance * 10);
+      if (!put) return;
+      if (!moved) moved = Float64Array.from(vertices);
+      moved[v * 3] = put[0]; moved[v * 3 + 1] = put[1]; moved[v * 3 + 2] = put[2];
+    });
+    return moved || vertices;
+  }
+
+  /**
    * Where to cut a surface that closes on itself, and which way each half then
    * runs round the cut.
    *
@@ -931,6 +986,7 @@
 
     var coordinates = vertices === brep.vertices ? brep.vertices : Float64Array.from(vertices);
     var bounded = faces.filter(function (f) { return f.loops; });
+    coordinates = seat(coordinates, bounded, o.tolerance);
     var built = buildEdges(coordinates, bounded, o.tolerance);
 
     // The seams are not edges of the mesh, so they are added rather than found.

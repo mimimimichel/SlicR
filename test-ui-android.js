@@ -208,11 +208,26 @@ function sphereSTL(seg, r) {
   const ballPath = path.join(dir, 'ball.stl');
   fs.writeFileSync(ballPath, sphereSTL(40, 10));
 
+  // A ball is now recognised as one sphere and written as two faces, which is
+  // the right answer and a file of two kilobytes — no use at all for showing
+  // that a big one crosses the bridge in pieces. So the recognition is switched
+  // off for this one, which is a setting the app has, and sixteen hundred flat
+  // faces go across instead.
+  const asFacets = async (page) => {
+    await page.evaluate(() => {
+      const box = document.getElementById('opt-recognise');
+      box.checked = false;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await settled(page);
+  };
+
   console.log('\n=== 2. a file too big for one piece still arrives whole ===');
   {
     const { page, errors } = await open();
     await page.setInputFiles('#file-input', ballPath);
     await settled(page);
+    await asFacets(page);
     await page.click('#btn-step');
     await page.waitForFunction(() => window.__android.ended, { timeout: 120000 });
     const got = await native(page);
@@ -236,6 +251,7 @@ function sphereSTL(seg, r) {
     const { page } = await open({ lose: 2 });
     await page.setInputFiles('#file-input', ballPath);
     await settled(page);
+    await asFacets(page);
     await page.click('#btn-step');
     await page.waitForFunction(() => window.__android.discarded || window.__android.ended,
       { timeout: 120000 });

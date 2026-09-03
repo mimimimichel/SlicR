@@ -70,33 +70,45 @@
   // ---------------------------------------------------------------------------
 
   /**
-   * One control for the two tolerances, because two numbers in millimetres and
+   * One control for three tolerances, because three numbers in millimetres and
    * degrees are not what somebody wants to think about. Pushed up, more of the
    * mesh collapses into fewer faces and the surface is allowed to move further
    * to do it.
    *
    * What it means is relative to the part: a twentieth of a millimetre is a lot
    * on a five millimetre bead and nothing on a three hundred millimetre bracket,
-   * so the gauge runs from two thousandths of a percent of the part's own size
-   * to two percent of it, along a scale where every step is the same
-   * proportional step rather than the same number of millimetres.
+   * so the gauge is a proportion of the part's own size, along a scale where
+   * every step is the same proportional step rather than the same number of
+   * millimetres.
+   *
+   * The two tolerances are not the same tolerance, and pinning them together
+   * was the single worst thing in here.
+   *
+   * The deviation is how far the *rebuild* may move the mesh — a rewrite of the
+   * triangles themselves. Open that up and faces reach across features, corners
+   * are flung onto crossings that are nowhere near where they were, the volume
+   * runs away from the original and the conversion refuses. It has to stay
+   * modest, and past about a thousandth of the part it stops paying.
+   *
+   * The shape tolerance is how far a *recognised* surface may sit off the
+   * facets it replaces, and that is a different question with a different
+   * answer. A cylinder put back where a hundred little planes were is not a
+   * rewrite of the mesh, it is the mesh's own surface named — and naming it
+   * generously is exactly what somebody pushing a slider marked "simple" is
+   * asking for. It can safely run out to a percent of the part, and on a
+   * modelled-by-hand part that is the difference between a thousand faces and
+   * fifty.
    */
-  var LOOSEST = -2.4;    // log10 of the deviation as a fraction of the part: 0.4%
-  var TIGHTEST = -3.9;   // and at the other end, a hundredth of a percent
-
-  // Both ends were once further out, and both were wasted. Past about half a
-  // percent of the part the rebuild stops being a rebuild — faces reach across
-  // features, the volume runs away from the mesh's own, and the conversion
-  // refuses, so the top of the gauge did nothing but refuse. Below a hundredth
-  // of a percent nothing merges that was not already merged, so the bottom of
-  // it did nothing at all. What is left is the part of the range where moving
-  // the gauge moves the answer.
+  var TIGHTEST = -3.9;      // log10 of both, as a fraction of the part, at rest
+  var REWRITE = -3.4;       // how far the rebuild may go, pushed all the way
+  var RESHAPE = -2.0;       // and how far a recognised surface may
 
   function gaugeToTolerances(gauge, size) {
     var t = Math.max(0, Math.min(1, gauge / 100));
     var scale = size > 0 ? size : 100;
     return {
-      deviation: scale * Math.pow(10, TIGHTEST + (LOOSEST - TIGHTEST) * t),
+      deviation: scale * Math.pow(10, TIGHTEST + (REWRITE - TIGHTEST) * t),
+      tolerance: scale * Math.pow(10, TIGHTEST + (RESHAPE - TIGHTEST) * t),
       // The angle opens with it, from a fifth of a degree to three: it is the
       // same question asked of the facets rather than of the corners.
       angle: Math.pow(10, Math.log(0.2) / Math.LN10 +
@@ -105,9 +117,9 @@
   }
 
   /** And back again, so a hand-typed tolerance moves the gauge to match. */
-  function tolerancesToGauge(deviation, size) {
+  function tolerancesToGauge(tolerance, size) {
     var scale = size > 0 ? size : 100;
-    var t = (Math.log(deviation / scale) / Math.LN10 - TIGHTEST) / (LOOSEST - TIGHTEST);
+    var t = (Math.log(tolerance / scale) / Math.LN10 - TIGHTEST) / (RESHAPE - TIGHTEST);
     return Math.max(0, Math.min(100, Math.round(t * 100)));
   }
 
@@ -137,6 +149,7 @@
   function applyGauge(rerun) {
     var found = gaugeToTolerances(parseFloat(el('opt-simplify').value), modelSize());
     el('opt-deviation').value = roundish(found.deviation);
+    el('opt-tolerance').value = roundish(found.tolerance);
     el('opt-angle').value = found.angle.toFixed(found.angle < 1 ? 2 : 1);
     showReading();
     if (rerun) { state.done = null; look(); }
@@ -150,14 +163,20 @@
    */
   function showReading(tail) {
     var t = tolerances();
+    var shapes = t.tolerance > t.deviation * 1.05
+      ? ' · shapes to <b>' + roundish(t.tolerance) + ' mm</b>' : '';
     el('simplify-reading').innerHTML = '<b>' + roundish(t.deviation) + ' mm</b> · ' +
-      t.angle.toFixed(t.angle < 1 ? 2 : 1) + '°' + (tail ? ' · ' + tail : '');
+      t.angle.toFixed(t.angle < 1 ? 2 : 1) + '°' + shapes + (tail ? ' · ' + tail : '');
   }
 
   function tolerances() {
+    var deviation = parseFloat(el('opt-deviation').value) || 0.05;
     return {
       angle: parseFloat(el('opt-angle').value) || 1.5,
-      deviation: parseFloat(el('opt-deviation').value) || 0.05,
+      deviation: deviation,
+      // Never tighter than the rebuild's own: a surface is being asked to stand
+      // in for facets that are already allowed to be that far off.
+      tolerance: Math.max(deviation, parseFloat(el('opt-tolerance').value) || deviation),
       snapAxes: el('opt-square').checked,
       recognise: el('opt-recognise').checked
     };
@@ -276,7 +295,7 @@
       var settings = tolerances();
       try {
         state.body = window.PrismaticSolid.build(report.brep, {
-          tolerance: settings.deviation,
+          tolerance: settings.tolerance,
           recognise: settings.recognise
         });
       } catch (e) {
@@ -293,8 +312,8 @@
         // gained, seen rather than counted.
         if (state.body) {
           showSolidReading();
-          var features = featuresOf(state.body, found.positions, settings.deviation);
-          if (features) state.viewer.setMesh(found.positions, features);
+          var features = featuresOf(state.body, found.positions, settings.tolerance);
+          if (features) state.viewer.setMesh(smoothed(state.body, found.positions, features), features);
           state.viewer.setEdges(solidEdges(state.body));
         }
         if (typeof then === 'function') then();
@@ -345,6 +364,61 @@
         best = f; bestGap = gap;
       }
       out[t] = best >= 0 ? best : body.faces.length;
+    }
+    return out;
+  }
+
+  /**
+   * The triangles put back onto the surfaces they were recognised as.
+   *
+   * Without this the picture is a lie in the one direction that matters. A ring
+   * of facets recognised as a cylinder is written into the file as a cylinder —
+   * smooth, exact, that is the whole point — and drawn on screen as the ring of
+   * facets it arrived as, so the answer to "did it find the shape" looks like
+   * no. Moving each corner onto its own face's surface draws what the file says
+   * rather than what went into it.
+   *
+   * A corner used by triangles of two different faces is on the edge between
+   * them and is left where the solid put it, which is what keeps the drawing
+   * closed rather than torn along every seam.
+   */
+  function smoothed(body, positions, features) {
+    var P = window.PrismaticPrimitives;
+    if (!P || !P.pull) return positions;
+    var grid = 1e4;
+    var key = function (o) {
+      return Math.round(positions[o] * grid) + ',' + Math.round(positions[o + 1] * grid) +
+        ',' + Math.round(positions[o + 2] * grid);
+    };
+    var owner = new Map();
+    var count = (positions.length / 9) | 0;
+    var t, k, at;
+    for (t = 0; t < count; t++) {
+      for (k = 0; k < 3; k++) {
+        at = key(t * 9 + k * 3);
+        var was = owner.get(at);
+        if (was === undefined) owner.set(at, features[t]);
+        else if (was !== features[t]) owner.set(at, -1);
+      }
+    }
+
+    var moved = new Map();
+    var out = new Float32Array(positions);
+    for (t = 0; t < count; t++) {
+      var face = body.faces[features[t]];
+      if (!face || !face.surface || face.surface.type === 'plane') continue;
+      for (k = 0; k < 3; k++) {
+        var o = t * 9 + k * 3;
+        at = key(o);
+        if (owner.get(at) !== features[t]) continue;
+        var put = moved.get(at);
+        if (!put) {
+          put = P.pull([face.surface], [positions[o], positions[o + 1], positions[o + 2]], 0);
+          if (!put) continue;
+          moved.set(at, put);
+        }
+        out[o] = put[0]; out[o + 1] = put[1]; out[o + 2] = put[2];
+      }
     }
     return out;
   }
@@ -415,7 +489,14 @@
       ['Corners off their planes', report.flatness < 1e-9 ? 'none' : mm(report.flatness)],
       ['Watertight', report.watertight ? 'yes' : 'no'],
       state.body ? ['Solid faces', shapes(state.body.counts), true] : null,
-      state.body ? ['Solid edges', count(state.body.edges.length) + curves(state.body)] : null
+      state.body ? ['Solid edges', count(state.body.edges.length) + curves(state.body)] : null,
+      // What the recognised surfaces cost. A corner belongs to every face that
+      // meets there and is put back where they cross, but two faces meeting at
+      // a shallow angle barely pin a corner down at all, and at the loose end
+      // of the gauge a few of them stay off. Saying so is better than the file
+      // saying it for us in somebody else's modeller.
+      state.body ? ['Corners off their faces',
+        state.body.slack < 1e-9 ? 'none' : mm(state.body.slack)] : null
     ]);
     el('report-block').hidden = false;
   }
@@ -702,10 +783,10 @@
       clearTimeout(settle);
       settle = setTimeout(function () { look(); }, 120);
     }
-    ['opt-angle', 'opt-deviation', 'opt-square', 'opt-recognise'].forEach(function (id) {
+    ['opt-angle', 'opt-deviation', 'opt-tolerance', 'opt-square', 'opt-recognise'].forEach(function (id) {
       el(id).addEventListener('change', function () {
-        if (id === 'opt-deviation') {
-          el('opt-simplify').value = tolerancesToGauge(parseFloat(el('opt-deviation').value), modelSize());
+        if (id === 'opt-tolerance' || id === 'opt-deviation') {
+          el('opt-simplify').value = tolerancesToGauge(tolerances().tolerance, modelSize());
         }
         changed();
       });

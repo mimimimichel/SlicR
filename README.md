@@ -158,6 +158,27 @@ simplification is something you watch rather than something you are told about.
 What it means is a proportion of the part, so the same setting is sensible on a
 five-millimetre bead and on a three-hundred-millimetre bracket.
 
+It drives two tolerances, and they are not the same tolerance. How far the
+**rebuild** may move the mesh is a rewrite of the triangles themselves: open
+that up and faces reach across features, corners are flung onto crossings
+nowhere near where they were, and the conversion refuses because the volume no
+longer matches. It stays modest. How far a **recognised surface** may sit off
+the facets it replaces is a different question — a cylinder put back where a
+hundred little planes were is not a rewrite, it is the mesh's own surface named
+— and naming it generously is exactly what somebody pushing a slider marked
+*simple* is asking for. That one runs out to a percent of the part. On a part
+modelled by hand it is the difference between a thousand faces and fifty, and
+tying the two together was for a long time the single worst thing in here.
+
+Once the surfaces are known the corners are put back on them, the same way the
+flat rebuild puts them on the crossings of their planes: a corner belongs to
+every face that meets there, and after a ring of facets has become one cylinder
+it has to be on the cylinder. Otherwise the file says the edge of a face is
+somewhere the face is not, which is what a modeller trips over and why a body
+will not stitch. The screen shows the same thing — the triangles are drawn on
+the surfaces they were recognised as, not as the facets they arrived as, so
+"did it find the shape" is a question you can answer by looking.
+
 It matters more than it sounds. A tolerance tighter than a mesh's own facets
 means nothing can be recognised — a ball tessellated in 32 segments is 0.08 mm
 away from being a ball, so at 0.05 mm it stays 976 planes, and at the edge of
@@ -228,12 +249,13 @@ that mesh is weighed. For a 20 x 30 x 10 box it comes to 6000.000 mm3, and for
 the plate with the six millimetre bore, short by exactly the bore.
 
 What is not there is a CAD kernel, and it shows at the edges. Planes,
-cylinders, cones, spheres and tori are recognised — which covers a doughnut and
-most of a fillet — but a swept or lofted surface is not, and comes through as
-the band of flat faces it arrived as, faceted to the deviation you set. On a
-part whose surfaces run into one another everywhere the answer also stops
-improving past about half a percent of the part: the reader's own volume check
-is the honest one there, and it is in the suite.
+cylinders, cones, spheres and tori are recognised — which covers a doughnut, a
+turned bead and most of a fillet — but a swept or lofted surface is not, and
+comes through as the band of flat faces it arrived as, faceted to the deviation
+you set. Where two surfaces meet at a shallow angle the corner between them is
+poorly pinned down, and at the loose end of the gauge a few of those stay a
+tenth of a millimetre off the faces they belong to; the app reports the worst of
+them rather than hiding it.
 
 ## Android
 

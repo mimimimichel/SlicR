@@ -284,8 +284,13 @@ function sphereSTL(seg = 24, r = 10) {
   // The numbers live behind a fold now; the gauge is the front door.
   await page.evaluate(() => { document.querySelector('.pr-exact').open = true; });
   await page.fill('#opt-deviation', '4');
+  await page.fill('#opt-tolerance', '4');
   await page.fill('#opt-angle', '30');
   await page.locator('#opt-angle').blur();
+  // Typing into a field schedules a fresh read of the mesh a moment later, and
+  // the read puts its own message up. Waiting for that to have started and
+  // finished is what keeps this from reading the wrong message.
+  await page.waitForTimeout(400);
   await settled();
   const roundTriangles = (await readList('facts')).Triangles;
   await page.click('#btn-convert');
@@ -323,8 +328,16 @@ function sphereSTL(seg = 24, r = 10) {
   ok('it reads in millimetres and degrees, not in gauge units',
     /mm · [\d.]+°/.test(tight), tight);
   const mm = t => parseFloat(t);
-  ok('pushing it lets the surface move further (' + mm(tight) + ' → ' + mm(loose) + ' mm)',
-    mm(loose) > mm(tight) * 10, mm(tight) + ' → ' + mm(loose));
+  // The two tolerances the gauge drives are not the same tolerance and do not
+  // move together. How far the rebuild may move the mesh stays modest whatever
+  // the gauge says — open that up and faces reach across features and the
+  // conversion refuses. How far a recognised cylinder may sit off the facets it
+  // stands in for is the lever, and it is the one that has to travel.
+  const shapes = t => parseFloat(/shapes to ([\d.]+) mm/.exec(t)[1]);
+  ok('pushing it lets a recognised shape sit further off (' + shapes(tight) + ' → ' + shapes(loose) + ' mm)',
+    shapes(loose) > shapes(tight) * 10, shapes(tight) + ' → ' + shapes(loose));
+  ok('while the rebuild itself stays close to the mesh (' + mm(tight) + ' → ' + mm(loose) + ' mm)',
+    mm(loose) > mm(tight) && mm(loose) < mm(tight) * 10, mm(tight) + ' → ' + mm(loose));
   ok('and what it did is on the model, not just described: ' + loose,
     /cylinder/.test(loose) && !/cylinder/.test(tight), tight + ' | ' + loose);
   // What it means depends on the part: the same setting is a different number

@@ -94,9 +94,15 @@
             </label>
             <span class="pr-num"><input id="opt-deviation" type="number" inputmode="decimal" min="0.001" max="20" step="0.01" value="0.05"><i>mm</i></span>
           </div>
+          <div class="pr-field">
+            <label for="opt-tolerance">Shape tolerance
+              <small>how far a cylinder, cone, ball or doughnut may sit off the faces it replaces</small>
+            </label>
+            <span class="pr-num"><input id="opt-tolerance" type="number" inputmode="decimal" min="0.001" max="20" step="0.01" value="0.05"><i>mm</i></span>
+          </div>
         </details>
         <div class="pr-field">
-          <label for="opt-recognise">Find cylinders and cones
+          <label for="opt-recognise">Find cylinders, cones, balls and doughnuts
             <small>a ring of flat faces that is really a hole becomes one, with a circle at each end</small>
           </label>
           <span class="pr-switch"><input id="opt-recognise" type="checkbox" checked><i></i></span>

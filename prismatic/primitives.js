@@ -261,11 +261,36 @@
     return { axis: axis, spread: Math.sqrt(Math.max(0, e.values[0]) / g.weight), mean: mean };
   }
 
+  /**
+   * The axes a surface of revolution could be about.
+   *
+   * Two answers, because the usual one is not always the good one. The normals
+   * of a cylinder lie in a plane through the origin, so the direction they have
+   * least of is the axis — which is exact on a whole bore and useless on a band
+   * a millimetre tall, where the normals barely lean at all and the direction
+   * they have least of is noise. Where the normals *meet* is the other answer,
+   * and it is the better one there: it uses where the facets are as well as
+   * which way they face, and a shallow band pins it down perfectly well.
+   *
+   * Both are tried and whichever fits the points is kept. On a turned part
+   * whose profile is not made of lines and circles — a sculpted bead, a barrel,
+   * anything modelled by hand — this is the difference between the band coming
+   * back as one cylinder and coming back as three hundred and seventy-eight
+   * little planes.
+   */
+  function turningAxis(g) {
+    var turned = axisOfRevolution(g);
+    return turned ? turned.axis : null;
+  }
+
   /** A cylinder: axis from the normals, then centre and radius from the planes. */
-  function fitCylinder(g) {
-    var found = axisOf(g, false);
-    if (!found) return null;
-    var a = found.axis;
+  function fitCylinder(g, axis) {
+    var a = axis;
+    if (!a) {
+      var found = axisOf(g, false);
+      if (!found) return null;
+      a = found.axis;
+    }
     var u = across(a);
     if (!u) return null;
     var v = cross(a, u);
@@ -319,12 +344,12 @@
    * the cone is the side of the apex they are on. Once that is fixed, the sign
    * of the normals' lean says which of the two it is.
    */
-  function fitCone(g, points) {
+  function fitCone(g, points, axis) {
     var q = solve(g.nn, g.dn, 3);
     if (!q) return null;
     var found = axisOf(g, true);
     if (!found) return null;
-    var a = found.axis;
+    var a = axis || found.axis;
 
     var reach = 0;
     for (var i = 0; i < points.length; i++) {
@@ -526,10 +551,10 @@
    * are will swallow the cap into the bore. What separates them is which way
    * they face: the cap faces along the axis, the bore across it.
    */
-  function tangent(s, normal, points, cosTol) {
+  function tangent(s, normal, points, cosTol, tolerance) {
     var want = facing(s, points);
     if (!want) return false;
-    return dot(normal, want) >= cosTol;
+    return along(normal, want, dot(normal, want), points, cosTol, tolerance);
   }
 
   /**
@@ -538,10 +563,56 @@
    * a sliver facing backwards where the surface turns over, and a sliver facing
    * backwards is still on the surface.
    */
-  function alongside(s, normal, points, cosTol) {
+  function alongside(s, normal, points, cosTol, tolerance) {
     var want = facing(s, points);
     if (!want) return false;
-    return Math.abs(dot(normal, want)) >= cosTol;
+    var agree = dot(normal, want);
+    var side = agree < 0 ? [-normal[0], -normal[1], -normal[2]] : normal;
+    return along(side, want, Math.abs(agree), points, cosTol, tolerance);
+  }
+
+  /**
+   * How square a face may sit to the surface it is on, which depends on how far
+   * it reaches the way it is tilted.
+   *
+   * The question this asks is whether the face lies along the surface or cuts
+   * across it, and the reason for asking is the flat end of a cylinder: every
+   * corner of it is on the cylinder, because the rim is where the two meet, so
+   * nothing but the direction it faces says it is not part of the bore.
+   *
+   * A fixed angle is the wrong way to ask it. On a part modelled by hand the
+   * facets of one smooth band scatter by thirty-odd degrees, and most of them
+   * are slivers: long the way the band runs, and a few hundredths of a
+   * millimetre across the way they lean. Tilted thirty degrees over four
+   * hundredths of a millimetre, a sliver stands a hundredth of a millimetre off
+   * the surface — it is on the surface, and refusing it leaves the band in
+   * three hundred and seventy-eight pieces, which is what the report was. The
+   * same tilt on the end cap of a cylinder is measured across the whole cap and
+   * comes to millimetres, and that one really does cut across.
+   *
+   * So the reach is measured along the one direction that matters — the one the
+   * face and the surface part company in, which is across their common line —
+   * and the face is kept if what it opens up over that reach is inside the
+   * tolerance. Never less than the angle asked for, which is what a face big
+   * enough to be judged on its direction alone still gets.
+   */
+  function along(normal, want, agree, points, cosTol, tolerance) {
+    if (agree >= cosTol) return true;
+    if (!(tolerance > 0) || !(agree > 0)) return false;
+    // The steepest way out of the face's own plane, towards the surface.
+    var e = norm([
+      want[0] - agree * normal[0],
+      want[1] - agree * normal[1],
+      want[2] - agree * normal[2]
+    ]);
+    if (!e) return true;
+    var lo = Infinity, hi = -Infinity;
+    for (var i = 0; i < points.length; i++) {
+      var t = dot(points[i], e);
+      if (t < lo) lo = t;
+      if (t > hi) hi = t;
+    }
+    return (hi - lo) / 2 * Math.sqrt(Math.max(0, 1 - agree * agree)) <= tolerance;
   }
 
   function facing(s, points) {
@@ -615,6 +686,108 @@
     return worst;
   }
 
+  /**
+   * How far off the surface a point is, with a sign: positive on the side the
+   * surface faces. It is what `distance` measures before it forgets which way,
+   * and it is also, differentiated, the direction to move to get back on —
+   * which is exactly `normalAt`. That pairing is the whole of `pull`.
+   */
+  function offset(s, p) {
+    if (s.type === 'plane') return p[0] * s.x + p[1] * s.y + p[2] * s.z - s.d;
+    if (s.type === 'sphere') {
+      var dx = p[0] - s.centre[0], dy = p[1] - s.centre[1], dz = p[2] - s.centre[2];
+      return Math.sqrt(dx * dx + dy * dy + dz * dz) - s.radius;
+    }
+    if (s.type === 'cylinder') {
+      var wx = p[0] - s.point[0], wy = p[1] - s.point[1], wz = p[2] - s.point[2];
+      var t = wx * s.axis[0] + wy * s.axis[1] + wz * s.axis[2];
+      var rx = wx - t * s.axis[0], ry = wy - t * s.axis[1], rz = wz - t * s.axis[2];
+      return Math.sqrt(rx * rx + ry * ry + rz * rz) - s.radius;
+    }
+    if (s.type === 'cone') {
+      var ax = p[0] - s.apex[0], ay = p[1] - s.apex[1], az = p[2] - s.apex[2];
+      var along = ax * s.axis[0] + ay * s.axis[1] + az * s.axis[2];
+      var px = ax - along * s.axis[0], py = ay - along * s.axis[1], pz = az - along * s.axis[2];
+      var radial = Math.sqrt(px * px + py * py + pz * pz);
+      return radial * Math.cos(s.halfAngle) - along * Math.sin(s.halfAngle);
+    }
+    if (s.type === 'torus') {
+      var tx = p[0] - s.centre[0], ty = p[1] - s.centre[1], tz = p[2] - s.centre[2];
+      var t2 = tx * s.axis[0] + ty * s.axis[1] + tz * s.axis[2];
+      var qx = tx - t2 * s.axis[0], qy = ty - t2 * s.axis[1], qz = tz - t2 * s.axis[2];
+      var out = Math.sqrt(qx * qx + qy * qy + qz * qz) - s.major;
+      return Math.sqrt(out * out + t2 * t2) - s.minor;
+    }
+    return NaN;
+  }
+
+  /**
+   * A corner put back where the surfaces meeting there cross.
+   *
+   * The planar rebuild already does this with planes, and for the same reason:
+   * a corner of the solid belongs to every face that meets at it, and in the
+   * part it came from it sat where those faces cross. Once a ring of facets has
+   * become one cylinder the corner has to move onto the cylinder, or the file
+   * says the edge of a face is somewhere the face is not — which is what a
+   * reader trips over, and what leaves a body that will not stitch.
+   *
+   * Curved surfaces do not cross in one step the way planes do, so it is
+   * solved rather than crossed: each surface says how far off it the point is
+   * and which way is back, and the step is the damped least-squares answer to
+   * all of them at once, taken again until it stops improving. Damped, because
+   * two faces meeting at a shallow angle leave a direction the surfaces say
+   * nothing about, and an undamped solve will happily slide a corner a
+   * millimetre along it to gain a hundredth. The smallest move that fixes what
+   * can be fixed is the one wanted.
+   */
+  function pull(surfaces, p, limit) {
+    var at = [p[0], p[1], p[2]];
+    var best = at.slice(), bestGap = worstOf(surfaces, at);
+    var damping = 1e-6;
+    for (var step = 0; step < 16 && bestGap > 1e-12; step++) {
+      var M = new Float64Array(9), b = [0, 0, 0], count = 0;
+      for (var i = 0; i < surfaces.length; i++) {
+        var f = offset(surfaces[i], at);
+        var g = normalAt(surfaces[i], at);
+        if (!g || !isFinite(f)) continue;
+        for (var x = 0; x < 3; x++) {
+          b[x] -= f * g[x];
+          for (var y = 0; y < 3; y++) M[x * 3 + y] += g[x] * g[y];
+        }
+        count++;
+      }
+      if (!count) break;
+      var damp = damping * count;
+      M[0] += damp; M[4] += damp; M[8] += damp;
+      var dx = solve(M, b, 3);
+      if (!dx || !isFinite(dx[0]) || !isFinite(dx[1]) || !isFinite(dx[2])) break;
+      var next = [at[0] + dx[0], at[1] + dx[1], at[2] + dx[2]];
+      var now = worstOf(surfaces, next);
+      if (now < bestGap) {
+        bestGap = now; best = next; at = next;
+        damping = Math.max(1e-9, damping * 0.3);
+      } else {
+        damping *= 8;
+        at = best.slice();
+        if (damping > 1e3) break;
+      }
+    }
+    var mx = best[0] - p[0], my = best[1] - p[1], mz = best[2] - p[2];
+    var travel = Math.sqrt(mx * mx + my * my + mz * mz);
+    if (!isFinite(travel) || (limit > 0 && travel > limit)) return null;
+    return best;
+  }
+
+  function worstOf(surfaces, p) {
+    var worst = 0;
+    for (var i = 0; i < surfaces.length; i++) {
+      var f = Math.abs(offset(surfaces[i], p));
+      if (!isFinite(f)) return Infinity;
+      if (f > worst) worst = f;
+    }
+    return worst;
+  }
+
   function distance(s, p) {
     if (s.type === 'sphere') {
       var dx = p[0] - s.centre[0], dy = p[1] - s.centre[1], dz = p[2] - s.centre[2];
@@ -662,27 +835,52 @@
    * does not change — and it lets a long cylinder turn into a sphere halfway
    * along itself, which is not an improvement.
    */
-  function refit(kind, group, points, tolerance, on) {
-    var seats = on || points;
-    var s = kind === 'cylinder' ? fitCylinder(group)
-      : kind === 'cone' ? fitCone(group, seats)
-      : kind === 'sphere' ? fitSphere(group)
+  /** Every surface of this kind worth trying on this group. */
+  function tries(kind, group, seats) {
+    var out = [];
+    if (kind === 'cylinder' || kind === 'cone') {
+      // Its own axis first — the one the normals give, which is what each of
+      // these was written around — and then the one the normals meet at, for
+      // the shallow band where the first is noise.
+      var own = kind === 'cylinder' ? fitCylinder(group) : fitCone(group, seats);
+      if (own) out.push(own);
+      var turned = turningAxis(group);
+      if (turned && (!own || Math.abs(dot(turned, own.axis)) < 0.9999)) {
+        var other = kind === 'cylinder' ? fitCylinder(group, turned)
+          : fitCone(group, seats, turned);
+        if (other) out.push(other);
+      }
+      return out;
+    }
+    var one = kind === 'sphere' ? fitSphere(group)
       : kind === 'torus' ? fitTorus(group, seats)
       : kind === 'plane' ? fitPlane(group, seats) : null;
-    if (!s) return null;
-    if (s.type === 'plane') {
-      var flat = deviation(s, points);
-      if (flat > tolerance) return null;
-      s.deviation = flat;
-      return s;
+    if (one) out.push(one);
+    return out;
+  }
+
+  /** Sized and positioned against the points, then measured against them. */
+  function settle(s, points, seats, tolerance) {
+    if (s.type !== 'plane') {
+      s = refine(s, seats);
+      if (!s) return null;
+      if (!(s.radius === undefined || s.radius > 1e-6)) return null;
     }
-    s = refine(s, seats);
-    if (!s) return null;
-    if (!(s.radius === undefined || s.radius > 1e-6)) return null;
     var gap = deviation(s, points);
     if (gap > tolerance) return null;
     s.deviation = gap;
     return s;
+  }
+
+  function refit(kind, group, points, tolerance, on) {
+    var seats = on || points;
+    var made = tries(kind, group, seats);
+    var best = null;
+    for (var i = 0; i < made.length; i++) {
+      var s = settle(made[i], points, seats, tolerance);
+      if (s && (!best || s.deviation < best.deviation)) best = s;
+    }
+    return best;
   }
 
   /**
@@ -727,18 +925,14 @@
     // the middles of the facets included, which are not on it and are where a
     // wrong answer shows.
     var seats = on || points;
-    var tries = [fitCylinder(group), fitCone(group, seats), fitSphere(group), fitTorus(group, seats)];
-    var best = null, bestGap = Infinity;
-    for (var i = 0; i < tries.length; i++) {
-      var s = tries[i];
-      if (!s) continue;
-      s = refine(s, seats);
-      if (!s) continue;
-      if (!(s.radius === undefined || s.radius > 1e-6)) continue;
-      var gap = deviation(s, points);
-      if (gap <= tolerance && gap < bestGap) { best = s; bestGap = gap; }
-    }
-    if (best) best.deviation = bestGap;
+    var best = null;
+    ['cylinder', 'cone', 'sphere', 'torus'].forEach(function (kind) {
+      var made = tries(kind, group, seats);
+      for (var i = 0; i < made.length; i++) {
+        var s = settle(made[i], points, seats, tolerance);
+        if (s && (!best || s.deviation < best.deviation)) best = s;
+      }
+    });
     return best;
   }
 
@@ -867,6 +1061,8 @@
     tangent: tangent,
     alongside: alongside,
     distance: distance,
+    offset: offset,
+    pull: pull,
     deviation: deviation,
     eigen3: eigen3,
     solve: solve
