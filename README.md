@@ -39,6 +39,19 @@ take.
 thicken, lean together and reach the plate as a few trunks, using about half the
 material and touching the part only at the tips.
 
+**Mesh to solid.** An STL is a solid that was chopped into triangles, and the
+prismatic conversion puts it back together: the flat faces are found and each
+fitted to one exact plane, every vertex is moved onto the corner where its
+planes cross, and each face is rebuilt from its outline rather than kept as a
+fan of facets. It is the prismatic half of Fusion's Convert Mesh, and it is what
+makes a top surface land in one layer instead of two and a wall read as vertical
+rather than as a shallow overhang — usually in a tenth of the triangles. Every
+face is measured against the facets it replaces and the finished body against
+the volume and the seams of the one it came from, so what does not add up is
+handed back untouched rather than quietly reshaped. It also says what a mesh is
+before being asked to convert it, and says so plainly when the answer is a scan
+that should be left alone.
+
 **Painting.** Three brushes on the model itself: force support here, keep
 support away, put the seam on this face. Marks follow the model through every
 move, rotation and scale.
@@ -83,6 +96,7 @@ node test-multitool.js           # tool changes and the prime tower
 node test-template.js            # the custom G-code expression language
 node test-gcodecheck.js          # 35 injected faults the checker must catch
 node test-profiles.js            # all 43 profiles with every feature on
+node test-prismatic.js           # mesh to solid, on shapes whose volume is known
 ```
 
 ### Measured against a reference
@@ -132,6 +146,7 @@ js/slicer/
   template.js         the custom G-code expression language
   presets.js          printers, filaments, quality profiles
   meshtools.js        split and cut
+  prismatic.js        mesh to solid, the flat faces found and refitted
   viewer.js           three.js scene, preview, painting
   app.js              UI
   worker.js           the slicing worker

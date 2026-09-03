@@ -2087,6 +2087,7 @@
     });
     body.appendChild(row2);
     body.appendChild(renderCutSection(m));
+    body.appendChild(renderSolidSection(m));
 
     var warn = document.createElement('div');
     warn.className = 'sl-warn';
@@ -2232,6 +2233,202 @@
     note.textContent = 'The cut face is closed off, so both halves stay solid.';
     details.appendChild(note);
     return details;
+  }
+
+  /**
+   * Rebuilding the mesh into a prismatic solid — the flat faces found and
+   * fitted, the vertices put back on the corners where their planes cross, the
+   * facets replaced by the outline they were cut from. Fusion calls it Convert
+   * Mesh; the tolerances mean the same thing here as they do there.
+   */
+  function renderSolidSection(m) {
+    var details = document.createElement('details');
+    details.className = 'sl-section';
+    var summary = document.createElement('summary');
+    summary.textContent = 'Convert to solid';
+    details.appendChild(summary);
+
+    var s = state.solid || (state.solid = { angle: 1.5, deviation: 0.05, snapAxes: true });
+
+    var verdict = document.createElement('div');
+    verdict.className = 'sl-hint';
+    verdict.id = 'solid-verdict';
+    details.appendChild(verdict);
+
+    var fields = [
+      { key: 'angle', label: 'Face angle', unit: '°', min: 0.1, max: 30, step: 0.1,
+        hint: 'how far a facet may lean before it is a face of its own' },
+      { key: 'deviation', label: 'Deviation', unit: 'mm', min: 0.001, max: 2, step: 0.01,
+        hint: 'how far a corner may sit off the face it is put in' }
+    ];
+    fields.forEach(function (f) {
+      var row = document.createElement('div');
+      row.className = 'sl-field';
+      var label = document.createElement('label');
+      label.textContent = f.label;
+      var small = document.createElement('small');
+      small.textContent = f.hint;
+      label.appendChild(small);
+      row.appendChild(label);
+      var control = document.createElement('div');
+      control.className = 'sl-control';
+      var input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'sl-num';
+      input.inputMode = 'decimal';
+      input.min = f.min; input.max = f.max; input.step = f.step;
+      input.value = s[f.key];
+      input.setAttribute('aria-label', f.label);
+      input.onchange = function () {
+        var val = parseFloat(input.value);
+        if (isNaN(val)) { input.value = s[f.key]; return; }
+        s[f.key] = Math.max(f.min, Math.min(f.max, val));
+        input.value = s[f.key];
+        s.done = null;
+        describeSolid(m);
+      };
+      control.appendChild(input);
+      var unit = document.createElement('span');
+      unit.className = 'sl-unit';
+      unit.textContent = f.unit;
+      control.appendChild(unit);
+      row.appendChild(control);
+      details.appendChild(row);
+    });
+
+    var squareRow = document.createElement('div');
+    squareRow.className = 'sl-field';
+    var squareLabel = document.createElement('label');
+    squareLabel.textContent = 'Square up to X/Y/Z';
+    var squareHint = document.createElement('small');
+    squareHint.textContent = 'a face nearly on an axis is put exactly on it, so long as that stays inside the deviation';
+    squareLabel.appendChild(squareHint);
+    squareRow.appendChild(squareLabel);
+    var sw = document.createElement('span');
+    sw.className = 'sl-switch';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = s.snapAxes !== false;
+    cb.setAttribute('aria-label', 'Square faces up to the axes');
+    cb.onchange = function () { s.snapAxes = cb.checked; s.done = null; describeSolid(m); };
+    sw.appendChild(cb); sw.appendChild(document.createElement('i'));
+    squareRow.appendChild(sw);
+    details.appendChild(squareRow);
+
+    var row = document.createElement('div');
+    row.className = 'sl-row';
+    var apply = document.createElement('button');
+    apply.className = 'sl-btn primary';
+    apply.type = 'button';
+    apply.textContent = 'Convert';
+    apply.onclick = function () { convertSelected(m); };
+    row.appendChild(apply);
+    details.appendChild(row);
+
+    var note = document.createElement('div');
+    note.className = 'sl-hint';
+    note.textContent = 'The flat faces are found and fitted to one exact plane each, every vertex is put back where its planes cross, and each face is rebuilt from its outline — the prismatic half of Fusion\u2019s Convert Mesh. It is for parts that came out of CAD: what is curved gets faceted to the deviation above, so a scan or a sculpt is better left alone. Tolerances are in millimetres on the model, before any scaling.';
+    details.appendChild(note);
+
+    // The panel is rebuilt from scratch after a conversion, so the section has
+    // to remember whether it was open — otherwise the report of what just
+    // happened shuts itself away the moment it is written.
+    details.open = !!s.open;
+    details.ontoggle = function () {
+      s.open = details.open;
+      if (details.open) describeSolid(m);
+    };
+    // Nothing in here is in the document yet; the lookup has to wait for it.
+    if (details.open) setTimeout(function () { describeSolid(m); }, 0);
+    return details;
+  }
+
+  /** What the mesh is, before anything is done to it. */
+  function describeSolid(model) {
+    var box = el('solid-verdict');
+    if (!box) return;
+    var s = state.solid;
+    if (s.done && s.done.id === model.id) { say(s.done.text, 'sl-hint'); return; }
+    say('Looking at the mesh\u2026', 'sl-hint');
+
+    function say(text, cls) {
+      var live = el('solid-verdict');
+      if (!live) return;
+      live.className = cls;
+      live.textContent = text;
+    }
+
+    ensureGeometry(function (err) {
+      if (err) { say('Could not load the mesh tools.', 'sl-warn err'); return; }
+      // Reading a large mesh takes a moment, and the line above should be on
+      // screen while it happens rather than after it.
+      setTimeout(function () {
+        if (!el('solid-verdict')) return;
+        var look = window.OrcaPrismatic.analyze(model.source, solidOptions(s));
+        var head = look.triangles.toLocaleString() + ' triangles across ' +
+          look.faces.toLocaleString() + ' flat face' + (look.faces === 1 ? '' : 's');
+        if (look.verdict === 'empty') {
+          say('There is no geometry here to rebuild.', 'sl-warn err');
+        } else if (look.verdict === 'organic') {
+          say(head + '. Almost nothing on this mesh folds sharply, so it was never a prismatic ' +
+            'part — converting it would facet whatever is curved. Leave it be, or tighten the ' +
+            'deviation first.', 'sl-warn');
+        } else if (look.verdict === 'mixed') {
+          say(head + '. Part of this is curved and will be faceted to the deviation above; the ' +
+            'flat part will come out exactly flat.', 'sl-warn');
+        } else if (look.deviation < 1e-6 && look.triangles <= look.faces * 2) {
+          say(head + ', flat to the micron and in as few triangles as they can be drawn. This is ' +
+            'already the solid; there is nothing here to rebuild.', 'sl-hint');
+        } else {
+          say(head + (look.watertight ? '' : ', and not watertight to begin with') +
+            '. The facets sit up to ' + look.deviation.toFixed(3) + ' mm off those faces.', 'sl-hint');
+        }
+      }, 30);
+    });
+  }
+
+  function solidOptions(s) {
+    return { angle: s.angle, deviation: s.deviation, snapAxes: s.snapAxes !== false };
+  }
+
+  function convertSelected(model) {
+    var s = state.solid;
+    ensureGeometry(function (err) {
+      if (err) { alert('Could not load the mesh tools: ' + err.message); return; }
+      showProgress('Rebuilding the solid\u2026', 0.5);
+      setTimeout(function () {
+        var report;
+        try {
+          report = window.OrcaPrismatic.toSolid(model.source, solidOptions(s));
+        } catch (e) {
+          hideProgress();
+          alert('The conversion failed:\n\n' + (e.message || e));
+          return;
+        }
+        hideProgress();
+        if (!report.ok) {
+          s.done = null;
+          var box = el('solid-verdict');
+          if (box) { box.className = 'sl-warn err'; box.textContent = 'Left alone. ' + report.reason; }
+          return;
+        }
+
+        state.viewer.replaceGeometry(model, report.positions);
+        s.report = report;
+        s.done = {
+          id: model.id,
+          text: report.trianglesBefore.toLocaleString() + ' triangles rebuilt as ' +
+            report.triangles.toLocaleString() + ' across ' + report.faces.toLocaleString() +
+            ' face' + (report.faces === 1 ? '' : 's') +
+            (report.keptFacets ? ', ' + report.keptFacets + ' of which kept their facets' : '') +
+            '. Volume held to ' + (report.volumeError * 100).toFixed(2) + '%' +
+            (report.watertight ? ', watertight' : '') + '.'
+        };
+        invalidate();
+        renderPanel();
+        refreshEmpty();
+      }, 60);
+    });
   }
 
   function splitSelected(model) {
@@ -2759,15 +2956,17 @@
   }
 
   /**
-   * Split and cut need the geometry helpers in the page rather than the worker.
+   * Split, cut and the solid rebuild need the geometry helpers in the page
+   * rather than the worker.
    * They are occasional, user-driven actions, so the modules load on first use.
    */
   function ensureGeometry(done) {
-    if (window.OrcaMeshTools && window.OrcaEngineGeom && window.earcut) { done(null); return; }
+    if (window.OrcaMeshTools && window.OrcaPrismatic && window.OrcaEngineGeom && window.earcut) { done(null); return; }
     showProgress('Loading tools…', 0.4);
     loadScripts([
       'js/vendor/clipper.js', 'js/vendor/earcut.js',
-      'js/slicer/engine.js', 'js/slicer/meshtools.js', 'js/slicer/gcodecheck.js'
+      'js/slicer/engine.js', 'js/slicer/meshtools.js', 'js/slicer/prismatic.js',
+      'js/slicer/gcodecheck.js'
     ], function (err) {
       hideProgress();
       done(err);
