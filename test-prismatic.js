@@ -426,6 +426,82 @@ console.log('\n=== 11. how coarse the mesh is, and drawing what was found ===');
   // through the surface, and a few hundred of those is shrapnel rather than a
   // part. So: nothing may turn inside out, and nothing may move further than
   // the tolerance that put the surface there.
+  // A doughnut the way somebody models one: the shape is exact, the surface is
+  // not. It is the case the whole of this is for, and the one the clean shapes
+  // above never reach — the rebuild leaves folded slivers where a wobbly
+  // surface turns over, and every one of them used to be promoted to a face of
+  // its own. On the part this came from, forty-two of fifty-nine faces carried
+  // three hundredths of one percent of the surface between them, which is what
+  // turns a doughnut and three cylinders into a mosaic.
+  function roughTorus(R, r, round, tube, wobble) {
+    var seed = 12345;
+    var rnd = function () { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+    var pts = [], out = [];
+    for (var i = 0; i < round; i++) {
+      pts.push([]);
+      for (var j = 0; j < tube; j++) {
+        var u = 2 * Math.PI * i / round, v = 2 * Math.PI * j / tube;
+        var rr = r + wobble * rnd();
+        pts[i].push([(R + rr * Math.cos(v)) * Math.cos(u), (R + rr * Math.cos(v)) * Math.sin(u),
+          rr * Math.sin(v)]);
+      }
+    }
+    for (var a = 0; a < round; a++) {
+      for (var b = 0; b < tube; b++) {
+        var p = pts[a][b], q = pts[(a + 1) % round][b];
+        var w = pts[(a + 1) % round][(b + 1) % tube], t = pts[a][(b + 1) % tube];
+        out.push(p[0], p[1], p[2], q[0], q[1], q[2], w[0], w[1], w[2]);
+        out.push(p[0], p[1], p[2], w[0], w[1], w[2], t[0], t[1], t[2]);
+      }
+    }
+    return new Float32Array(out);
+  }
+  function areaOf(body, face) {
+    // The two halves of a whole ball or a whole doughnut are bounded by a seam
+    // that is one point, so there is no outline to measure and nothing to ask.
+    if (face.seam) return Infinity;
+    var whole = 0;
+    face.points.forEach(function (loop) {
+      var nx = 0, ny = 0, nz = 0;
+      for (var i = 0; i < loop.length; i++) {
+        var A = loop[i], B = loop[(i + 1) % loop.length];
+        nx += (body.vertices[A * 3 + 1] - body.vertices[B * 3 + 1]) * (body.vertices[A * 3 + 2] + body.vertices[B * 3 + 2]);
+        ny += (body.vertices[A * 3 + 2] - body.vertices[B * 3 + 2]) * (body.vertices[A * 3] + body.vertices[B * 3]);
+        nz += (body.vertices[A * 3] - body.vertices[B * 3]) * (body.vertices[A * 3 + 1] + body.vertices[B * 3 + 1]);
+      }
+      whole += Math.hypot(nx, ny, nz) / 2;
+    });
+    return whole;
+  }
+  {
+    var wobbly = roughTorus(12, 3, 96, 48, 0.05);
+    var rebuilt = P.toSolid(wobbly, { deviation: 0.02 });
+    ok('a doughnut nobody drew exactly still converts', rebuilt.ok, rebuilt.reason);
+
+    var loose = Solid.build(rebuilt.brep, { tolerance: 0.3 });
+    ok('and opened up far enough it is one doughnut, in two halves (' +
+      loose.faces.length + ' faces)',
+      loose.counts.torus === 1 && loose.faces.length === 2, JSON.stringify(loose.counts));
+
+    // Held closer it keeps more of its lumps, and that is right — but what it
+    // keeps has to be faces. Anything smaller than the square of the distance
+    // the surfaces were allowed to move is smaller than the answer's own
+    // resolution: there is nothing in it to describe, and it is given to
+    // whichever neighbour it shares the most boundary with.
+    var tight = Solid.build(rebuilt.brep, { tolerance: 0.1 });
+    var sizes = tight.faces.map(function (f) { return areaOf(tight, f); });
+    var real = sizes.filter(function (a) { return isFinite(a); });
+    var whole = real.reduce(function (t, a) { return t + a; }, 0);
+    var least = 0.1 * 0.1;
+    var crumbs = real.filter(function (a) { return a < least; });
+    var dust = crumbs.reduce(function (t, a) { return t + a; }, 0);
+    ok('and held closer, next to none of its ' + tight.faces.length +
+      ' faces is too small to be one (' + crumbs.length + ')',
+      crumbs.length <= tight.faces.length * 0.05, crumbs.length + ' of ' + tight.faces.length);
+    ok('nor is any measurable part of the surface in them (' +
+      (100 * dust / whole).toFixed(4) + '%)', dust < whole * 0.001, dust + ' of ' + whole);
+  }
+
   // Working the drawing out used to be given up on past four hundred faces,
   // and the edges of the solid went on being drawn over the colours of the mesh
   // underneath — one thing's boundaries on another thing's faces. There is no

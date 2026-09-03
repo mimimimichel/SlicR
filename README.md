@@ -185,6 +185,18 @@ the part, or four times that price. A 624-triangle turned part comes back as
 **six faces** — two cylinders, a torus, a ball and two ends — where before the
 gauge could not reach far enough to find any of them.
 
+And then the faces that are not faces are taken out. On one reported part,
+forty-two of fifty-nine faces carried three hundredths of one percent of the
+surface between them — slivers a few square microns each, left where the rebuild
+put a corner back on the crossing of two nearly parallel planes and it came out
+folded, every one of them promoted to a face of its own with its own colour and
+its own ring of edges. That is what turns a doughnut and three cylinders into a
+mosaic. The measure of too small is the tolerance squared: a face smaller than
+the square of the distance the surfaces are allowed to move is smaller than the
+answer's own resolution and has nothing in it to describe, so it goes to
+whichever neighbour it shares the most boundary with. **Fifty-nine faces to
+seventeen**, and every one of the seventeen carries surface.
+
 Once the surfaces are known the corners are put back on them, the same way the
 flat rebuild puts them on the crossings of their planes: a corner belongs to
 every face that meets there, and after a ring of facets has become one cylinder
@@ -281,7 +293,17 @@ round, cylinders walked over, each face triangulated in its own surface — and
 that mesh is weighed. For a 20 x 30 x 10 box it comes to 6000.000 mm3, and for
 the plate with the six millimetre bore, short by exactly the bore.
 
-What is not there is a CAD kernel, and it shows at the edges. Planes,
+What is not there is a CAD kernel, and where that shows is the *edges*. Every
+boundary here is the mesh's own: the ring of facet edges where one recognised
+region stops and the next begins, fitted to a straight line or a circle where it
+runs as one. What a modeller does instead is extend the two fitted surfaces and
+intersect them, so the edge between a cylinder and a plane is the exact ellipse
+they cross in and nothing else. That is the difference between a face that looks
+drawn and a face that looks traced, and it is why a boundary here can still come
+back as a few hundred short edges where it should be one long one — the faces
+are right, the lines between them are as good as the tessellation was.
+
+Beyond that: Planes,
 cylinders, cones, spheres and tori are recognised — which covers a doughnut, a
 turned bead and most of a fillet — but a swept or lofted surface is not, and
 comes through as the band of flat faces it arrived as, faceted to the deviation

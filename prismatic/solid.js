@@ -428,7 +428,84 @@
     }
 
     coalesce(groups, taken, neighbours, tolerance);
+    swallow(brep, faces, groups, taken, neighbours, weight, samples, tolerance);
     return { groups: groups, taken: taken };
+  }
+
+  /**
+   * Faces too small to be faces.
+   *
+   * On the reported part, forty-two of fifty-nine faces carried three hundredths
+   * of one percent of the surface between them. They are not features. They are
+   * what the rebuild leaves where a surface turns over — slivers whose corners
+   * were put back on the crossing of two nearly parallel planes and came out
+   * folded, a few square microns each — and every one of them was promoted to a
+   * face of its own, with its own colour and its own ring of edges. That is what
+   * makes a doughnut and three cylinders read as a mosaic.
+   *
+   * The measure of "too small" is the tolerance itself, squared: a face smaller
+   * than the square of the distance the surfaces are allowed to move is smaller
+   * than the answer's own resolution, and there is nothing in it to describe. So
+   * it is given to whichever neighbour it shares the most boundary with, as long
+   * as that neighbour's surface holds it — which it does, because a sliver that
+   * covers nothing sits on the edge of the face beside it.
+   *
+   * Groups go first: a group of a dozen folded slivers is no more a face than
+   * one sliver is, and letting it dissolve back gives its members somewhere to
+   * go.
+   */
+  function swallow(brep, faces, groups, taken, neighbours, weight, samples, tolerance) {
+    var P = root.PrismaticPrimitives;
+    var least = tolerance * tolerance;
+    if (!(least > 0)) return;
+
+    var spread = new Array(groups.length).fill(0);
+    for (var f = 0; f < faces.length; f++) if (taken[f] >= 0) spread[taken[f]] += weight[f];
+    for (var g = 0; g < groups.length; g++) {
+      if (spread[g] >= least) continue;
+      groups[g].members.forEach(function (m) { taken[m] = -1; });
+      groups[g].members.length = 0;
+    }
+
+    // How much boundary each pair of facets has in common, so that a sliver goes
+    // to the face it is most a part of rather than to whichever is asked first.
+    var V = brep.vertices.length / 3;
+    var along = new Map();
+    edgeMap(brep).forEach(function (edge) {
+      if (edge.faces.length !== 2) return;
+      var run = Math.hypot(
+        brep.vertices[edge.a * 3] - brep.vertices[edge.b * 3],
+        brep.vertices[edge.a * 3 + 1] - brep.vertices[edge.b * 3 + 1],
+        brep.vertices[edge.a * 3 + 2] - brep.vertices[edge.b * 3 + 2]);
+      var x = edge.faces[0], y = edge.faces[1];
+      var key = x < y ? x * V + y : y * V + x;
+      along.set(key, (along.get(key) || 0) + run);
+    });
+    var shared = function (x, y) {
+      return along.get(x < y ? x * V + y : y * V + x) || 0;
+    };
+
+    var moved = true, sweeps = 0;
+    while (moved && sweeps++ < 6) {
+      moved = false;
+      for (var f2 = 0; f2 < faces.length; f2++) {
+        if (taken[f2] >= 0 || weight[f2] >= least) continue;
+        var best = -1, most = 0;
+        for (var nb = 0; nb < neighbours[f2].length; nb++) {
+          var next = neighbours[f2][nb];
+          var into = taken[next];
+          if (into < 0 || !groups[into].members.length) continue;
+          var run = shared(f2, next);
+          if (run <= most) continue;
+          if (P.deviation(groups[into].surface, samples[f2]) > tolerance) continue;
+          best = into; most = run;
+        }
+        if (best < 0) continue;
+        groups[best].members.push(f2);
+        taken[f2] = best;
+        moved = true;
+      }
+    }
   }
 
   /**
@@ -925,6 +1002,10 @@
     var seams = [];
 
     found.groups.forEach(function (group) {
+      // A group dissolved for being too small to be a face has nothing left to
+      // bound, and a surface with nothing to bound is not the same thing as a
+      // surface that closes on itself.
+      if (!group.members.length) return;
       var loops = outlineOf(brep, brep.faces, group.members);
 
       // A surface with no boundary at all. A whole ball is one case and a whole
@@ -1233,7 +1314,7 @@
       return [uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx];
     };
 
-    for (var round = 0; round < 5; round++) {
+    var settle = function () {
       out.set(positions);
       want.forEach(function (put, where) {
         if (frozen.has(where)) return;
@@ -1242,21 +1323,27 @@
           out[list[i]] = put[0]; out[list[i] + 1] = put[1]; out[list[i] + 2] = put[2];
         }
       });
-
       var objected = false;
-      for (t = 0; t < count; t++) {
-        var o2 = t * 9;
+      for (var at = 0; at < count; at++) {
+        var o2 = at * 9;
         var was = normalOf(positions, o2), now = normalOf(out, o2);
         var before = Math.hypot(was[0], was[1], was[2]);
         var after = Math.hypot(now[0], now[1], now[2]);
         var turned = was[0] * now[0] + was[1] * now[1] + was[2] * now[2];
         if (before > 0 && (turned <= 0 || after > before * 3)) {
-          for (k = 0; k < 3; k++) frozen.add(key(o2 + k * 3));
+          for (var c = 0; c < 3; c++) frozen.add(key(o2 + c * 3));
           objected = true;
         }
       }
-      if (!objected) break;
-    }
+      return objected;
+    };
+    // Freezing one corner changes the triangles around it, so this is asked
+    // again until nothing objects. Freezing only ever grows, so it settles; and
+    // whatever the last round froze has to be applied before the answer is
+    // handed back, or the objection it raised is still in the picture.
+    var rounds = 16;
+    while (rounds-- > 0 && settle()) { /* again */ }
+    if (rounds < 0) settle();
     return out;
   }
 
