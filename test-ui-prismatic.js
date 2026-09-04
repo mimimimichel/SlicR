@@ -48,6 +48,24 @@ function boxSTL() {
   return out.join('\n');
 }
 
+/**
+ * The same box, tipped off the origin planes and written to six decimals —
+ * which is what every STL of a part that was not modelled square looks like.
+ * The rounding is half a millionth of a millimetre and it is enough: fitted
+ * one wall at a time, the six walls come back only nearly perpendicular.
+ */
+function tiltedBoxSTL() {
+  const az = 0.31, ax = 0.17;
+  const ca = Math.cos(az), sa = Math.sin(az), cb = Math.cos(ax), sb = Math.sin(ax);
+  return boxSTL().split('\n').map(line => {
+    if (!line.startsWith('vertex ')) return line;
+    const [x, y, z] = line.slice(7).trim().split(/\s+/).map(Number);
+    const x1 = x * ca - y * sa, y1 = x * sa + y * ca;
+    return 'vertex ' + [x1, y1 * cb - z * sb, y1 * sb + z * cb]
+      .map(n => n.toFixed(6)).join(' ');
+  }).join('\n');
+}
+
 /** A plate with a round hole drilled through it. */
 function drilledSTL(w, d, h, r, sides) {
   const cx = w / 2, cy = d / 2;
@@ -127,6 +145,8 @@ function sphereSTL(seg = 24, r = 10) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prismatic-'));
   const boxPath = path.join(dir, 'rough-box.stl');
   const ballPath = path.join(dir, 'ball.stl');
+  const tiltPath = path.join(dir, 'tilted-box.stl');
+  fs.writeFileSync(tiltPath, tiltedBoxSTL());
   fs.writeFileSync(boxPath, boxSTL());
   fs.writeFileSync(ballPath, sphereSTL());
 
@@ -416,6 +436,26 @@ function sphereSTL(seg = 24, r = 10) {
   console.log('  ' + scan.trim().slice(0, 120) + '…');
   ok('a sphere is not sold as a prismatic part', /never a prismatic part/.test(scan), scan);
   ok('and it is still offered, not blocked', !(await page.locator('#btn-convert').isDisabled()));
+
+  console.log('\n=== 8b. surfaces are told what they are to each other ===');
+  // A part that was not laid down square comes back as six walls fitted one at
+  // a time, and one at a time they are only nearly perpendicular. Saying so
+  // out loud is what makes the difference between a solid somebody can
+  // constrain in a modeller and a very tidy measurement of a mesh.
+  await page.reload();
+  await page.waitForSelector('#btn-open');
+  await page.setInputFiles('#file-input', tiltPath);
+  await settled();
+  await page.click('#btn-convert');
+  await page.waitForFunction(() => document.getElementById('toast').hidden &&
+    !document.getElementById('btn-step').disabled, { timeout: 120000 });
+  const constrained = await readList('report');
+  console.log('  ' + JSON.stringify(constrained['Surfaces made to agree'] || 'nothing'));
+  ok('the report says what was made to agree',
+    /squared/.test(constrained['Surfaces made to agree'] || ''),
+    JSON.stringify(constrained));
+  ok('and the file it will write is the constrained one, not the fitted one',
+    !(await page.locator('#btn-step').isDisabled()));
 
   console.log('\n=== 9. the sample part is there to try ===');
   await page.reload();

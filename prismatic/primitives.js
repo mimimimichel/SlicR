@@ -674,6 +674,166 @@
     return torus;
   }
 
+  // ---------------------------------------------------------------------------
+  // Putting a surface where another one already is
+  // ---------------------------------------------------------------------------
+
+  /**
+   * A doughnut about a given axis through a given point, sized to the points.
+   *
+   * The tail of fitting a doughnut, on its own, because the alignment pass has
+   * to ask for one about an axis it chose rather than about the axis the
+   * facets happened to suggest.
+   */
+  function torusAround(a, q, points, outward) {
+    if (!points || points.length < 8) return null;
+    var flat = new Array(points.length);
+    for (var i = 0; i < points.length; i++) {
+      var w = [points[i][0] - q[0], points[i][1] - q[1], points[i][2] - q[2]];
+      var t = dot(w, a);
+      var rx = w[0] - t * a[0], ry = w[1] - t * a[1], rz = w[2] - t * a[2];
+      flat[i] = [Math.sqrt(rx * rx + ry * ry + rz * rz), t];
+    }
+    var circle = circleThrough(flat);
+    if (!circle) return null;
+    if (!(circle.radius > 1e-6) || !(circle.x > circle.radius * 1.02)) return null;
+    return {
+      type: 'torus', axis: a,
+      centre: [q[0] + a[0] * circle.y, q[1] + a[1] * circle.y, q[2] + a[2] * circle.y],
+      major: circle.x, minor: circle.radius, radius: circle.radius,
+      outward: outward
+    };
+  }
+
+  /** Turn a vector by the shortest rotation that takes one direction to another. */
+  function turned(v, from, to) {
+    var c = dot(from, to);
+    if (c > 1 - 1e-15) return [v[0], v[1], v[2]];
+    var axis = norm(cross(from, to));
+    if (!axis) return [v[0], v[1], v[2]];        // exactly opposed: nothing sensible
+    var s = Math.sqrt(Math.max(0, 1 - c * c));
+    var k = cross(axis, v), kd = dot(axis, v) * (1 - c);
+    return [v[0] * c + k[0] * s + axis[0] * kd,
+            v[1] * c + k[1] * s + axis[1] * kd,
+            v[2] * c + k[2] * s + axis[2] * kd];
+  }
+
+  function centroid(points) {
+    var c = [0, 0, 0];
+    for (var i = 0; i < points.length; i++) {
+      c[0] += points[i][0]; c[1] += points[i][1]; c[2] += points[i][2];
+    }
+    return [c[0] / points.length, c[1] / points.length, c[2] / points.length];
+  }
+
+  /** Whichever direction a surface is built around: a plane's normal, an axis. */
+  function builtAround(s) {
+    if (s.type === 'plane') return [s.x, s.y, s.z];
+    if (s.type === 'sphere') return null;
+    return s.axis;
+  }
+
+  /**
+   * The same surface, turned to face a given direction and re-sized against
+   * the points it has to hold.
+   *
+   * This is the whole of what a constraint is here. Nothing is forced: the
+   * caller turns a surface, measures what that did to the facets underneath
+   * it, and keeps it only if they are still on it. So "make these parallel"
+   * never means "make these parallel and wrong".
+   *
+   * The surface is turned bodily about the middle of its own points, so a bore
+   * halfway up a part does not swing across the part when its axis is
+   * straightened, and then re-fitted, which puts back whatever the turn cost.
+   */
+  function reseat(s, dir, seats) {
+    var was = builtAround(s);
+    if (!was || !dir || !seats || seats.length < 3) return null;
+    var to = dot(was, dir) < 0 ? [-dir[0], -dir[1], -dir[2]] : dir;
+    // No early way out for "these are nearly the same direction already". A
+    // tenth of a microradian is a dot product of one to fifteen figures, and
+    // it is exactly the case this is for: the surface is rebuilt on the given
+    // direction whatever the angle was, because being told the direction is
+    // the point. Turning the surface's own position by an angle that small is
+    // a no-op, and turned() says so itself.
+    var mid = centroid(seats);
+    var move = function (p) {
+      var v = turned([p[0] - mid[0], p[1] - mid[1], p[2] - mid[2]], was, to);
+      return [mid[0] + v[0], mid[1] + v[1], mid[2] + v[2]];
+    };
+
+    if (s.type === 'plane') {
+      var d = 0;
+      for (var i = 0; i < seats.length; i++) d += dot(to, seats[i]);
+      return { type: 'plane', x: to[0], y: to[1], z: to[2], d: d / seats.length };
+    }
+    if (s.type === 'cylinder') {
+      return refineCylinder({ type: 'cylinder', axis: to, point: move(s.point),
+        radius: s.radius, outward: s.outward }, seats);
+    }
+    if (s.type === 'cone') {
+      return refineCone({ type: 'cone', axis: to, apex: move(s.apex),
+        halfAngle: s.halfAngle, outward: s.outward }, seats);
+    }
+    if (s.type === 'torus') return torusAround(to, move(s.centre), seats, s.outward);
+    return null;
+  }
+
+  /**
+   * The same surface, moved sideways onto a given line and re-sized. Its
+   * direction is the line's already — reseat saw to that — so all this does is
+   * make two bores that were nearly concentric concentric.
+   */
+  function recentre(s, line, seats) {
+    var a = builtAround(s);
+    if (!a || s.type === 'plane' || s.type === 'sphere') return null;
+    var onto = function (p) {
+      var w = [p[0] - line.at[0], p[1] - line.at[1], p[2] - line.at[2]];
+      var t = dot(w, a);
+      return [line.at[0] + a[0] * t, line.at[1] + a[1] * t, line.at[2] + a[2] * t];
+    };
+    if (s.type === 'cylinder') {
+      var at = onto(s.point), r = 0;
+      for (var i = 0; i < seats.length; i++) {
+        var w = [seats[i][0] - at[0], seats[i][1] - at[1], seats[i][2] - at[2]];
+        var t = dot(w, a);
+        r += Math.hypot(w[0] - t * a[0], w[1] - t * a[1], w[2] - t * a[2]);
+      }
+      return { type: 'cylinder', axis: a, point: at, radius: r / seats.length,
+               outward: s.outward };
+    }
+    if (s.type === 'cone') {
+      return refineCone({ type: 'cone', axis: a, apex: onto(s.apex),
+        halfAngle: s.halfAngle, outward: s.outward }, seats);
+    }
+    return torusAround(a, onto(s.centre), seats, s.outward);
+  }
+
+  /** The same surface at a given size, which is all "these holes match" means. */
+  function resize(s, radius) {
+    if (!(radius > 1e-9)) return null;
+    if (s.type === 'cylinder') {
+      return { type: 'cylinder', axis: s.axis, point: s.point, radius: radius,
+               outward: s.outward };
+    }
+    if (s.type === 'sphere') {
+      return { type: 'sphere', centre: s.centre, radius: radius, outward: s.outward };
+    }
+    if (s.type === 'torus') {
+      if (!(s.major > radius * 1.02)) return null;
+      return { type: 'torus', axis: s.axis, centre: s.centre, major: s.major,
+               minor: radius, radius: radius, outward: s.outward };
+    }
+    return null;
+  }
+
+  /** How big a surface is, where that is one number: what "the same size" compares. */
+  function sizeOf(s) {
+    if (s.type === 'cylinder' || s.type === 'sphere') return s.radius;
+    if (s.type === 'torus') return s.minor;
+    return 0;
+  }
+
   /** How far the furthest of these points sits from the surface. */
   function deviation(surface, points, at) {
     var worst = 0;
@@ -1169,6 +1329,11 @@
     axisOfRevolution: axisOfRevolution,
     refit: refit,
     refine: refine,
+    reseat: reseat,
+    recentre: recentre,
+    resize: resize,
+    sizeOf: sizeOf,
+    builtAround: builtAround,
     normalAt: normalAt,
     tangent: tangent,
     alongside: alongside,

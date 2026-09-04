@@ -689,6 +689,12 @@
       // saying it for us in somebody else's modeller.
       state.body ? ['Corners off their faces',
         state.body.slack < 1e-9 ? 'none' : mm(state.body.slack)] : null,
+      // What the constraint pass was able to say. Not decoration: it is the
+      // difference between faces a modeller can grab hold of — parallel ones
+      // that stay parallel, holes that are one diameter — and a very tidy
+      // measurement of a mesh, which is what every one of these was before.
+      state.body && agreed(state.body.aligned) ?
+        ['Surfaces made to agree', agreed(state.body.aligned)] : null,
       // And what the setting was actually spent on, which is not the setting.
       // A shape tolerance is a permission; this is the bill. On a part that
       // fits well it is a fraction of what was allowed, and knowing that is
@@ -697,6 +703,16 @@
         state.body.strain < 1e-9 ? 'none' : mm(state.body.strain)] : null
     ]);
     el('report-block').hidden = false;
+  }
+
+  /** What was constrained to what, in the order it was decided. */
+  function agreed(made) {
+    if (!made) return '';
+    var said = [];
+    if (made.squared) said.push(count(made.squared) + ' squared');
+    if (made.concentric) said.push(count(made.concentric) + ' concentric');
+    if (made.sized) said.push(count(made.sized) + ' to one size');
+    return said.join(' · ');
   }
 
   /** Once there is a solid, the gauge says what it actually came to. */

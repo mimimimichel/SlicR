@@ -241,6 +241,56 @@ answer's own resolution and has nothing in it to describe, so it goes to
 whichever neighbour it shares the most boundary with. **Fifty-nine faces to
 seventeen**, and every one of the seventeen carries surface.
 
+### Saying that two surfaces are the same surface
+
+Everything to this point fits each surface on its own, from its own facets.
+That is right, and it is also why the answer used to read as a *measurement*
+rather than as a drawing. Two walls of a slot come back 89.99999 degrees apart.
+Two holes drilled at one diameter come back at 4.000000012 and 4.000000175. A
+bore a rib interrupts comes back as two bores on axes a hundredth of a
+millimetre apart. Every one of those is inside the tolerance, and every one of
+them is wrong, because nobody drew them that way — and in a modeller they are
+the difference between faces you can constrain and faces you cannot. Make the
+wall parallel and it will not stay parallel; change the hole diameter and one
+of the two holes changes.
+
+So there is a pass that says it. Three questions, in order, because each one
+depends on the last:
+
+  - **Do these face the same way?** Directions are clustered, given the
+    weighted consensus of the cluster, snapped to X, Y or Z where they are
+    already there, and then **squared**: the heaviest three directions that are
+    nearly at right angles are made exactly perpendicular, and every surface in
+    each cluster is turned onto the result. A tilted, exporter-rounded box goes
+    from `1.2e-7` off square to `1.1e-16` — which is to say, exactly.
+  - **Do these turn about one line?** Cylinders, cones and doughnuts sharing a
+    direction and sitting within the tolerance of one axis are put on that axis.
+  - **Are these the same size?** Two radii that differ by less than the distance
+    their own facets already sit off them are not two radii; they are one
+    radius measured twice. The two bores come back `4.000000094` and
+    `4.000000094`.
+
+Nothing is ever forced. Each surface is turned, moved or resized, and then the
+facets it has to hold are measured against it: if any of them is now further off
+than the tolerance allows, the change is dropped and that surface keeps what it
+had. A constraint is only ever applied where the part was already saying it was
+true.
+
+Two limits on it, both learned the hard way. A constraint will not turn anything
+more than **one degree** — a facet a millimetre across can be swung five degrees
+for a twentieth of a millimetre, so measuring alone would let every scrap of a
+ball agree with every other scrap; parallel is a claim about direction, not
+about how much room the small ones have. And nothing is constrained on the
+strength of a facet that **leans gently into its neighbours**: a wall meets its
+neighbours at an edge, or lies flat against them, while a facet of a tessellated
+ball leans a few degrees into every neighbour it has. Its direction is the
+mesh's, not the designer's. Squaring a ball to itself is how a ball stops being
+one, and it took a STEP file that could no longer keep its own declared accuracy
+to notice.
+
+The panel reports what was said: **Surfaces made to agree — 18 squared · 11
+concentric · 9 to one size.**
+
 Once the surfaces are known the corners are put back on them, the same way the
 flat rebuild puts them on the crossings of their planes: a corner belongs to
 every face that meets there, and after a ring of facets has become one cylinder

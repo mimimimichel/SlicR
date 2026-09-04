@@ -34,6 +34,7 @@
 
   var DEFAULTS = {
     recognise: true,     // look for cylinders, cones and spheres at all
+    align: true,         // and then say which of them are the same surface
     minFaces: 4,         // planes it takes before a curve is worth believing
     smoothAngle: 45,     // deg; a fold gentler than this is worth asking about
     tangentAngle: 25,    // deg; how far a face may lean and still lie along a surface
@@ -487,7 +488,297 @@
 
     coalesce(groups, taken, neighbours, tolerance);
     swallow(brep, faces, groups, taken, neighbours, weight, samples, tolerance);
-    return { groups: groups, taken: taken };
+    // Which faces are pieces of a curve rather than faces of a part. A wall
+    // meets its neighbours at an edge, or lies flat against them where the
+    // rebuild split it; a facet of a tessellated ball leans a few degrees into
+    // every neighbour it has. Nothing is constrained to anything on the
+    // strength of a facet like that — its direction is the mesh's, not the
+    // designer's, and squaring a ball to itself is how a ball stops being one.
+    var curved = faces.map(function (_, f) {
+      for (var k = 0; k < neighbours[f].length; k++) {
+        var fold = bend(f, neighbours[f][k]);
+        if (fold < Math.cos(MOST_TURN) && fold > cosSmooth) return true;
+      }
+      return false;
+    });
+    return { groups: groups, taken: taken, curved: curved };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Saying that two surfaces are the same surface
+  // ---------------------------------------------------------------------------
+
+  /**
+   * What a mesh cannot tell you, and a drawing could.
+   *
+   * Every surface up to here was fitted on its own, from its own facets. That
+   * is right, and it is also why the answer reads as a scan rather than as a
+   * part: the two walls of a slot come back 89.94 degrees apart, four holes
+   * drilled at one diameter come back 5.98, 6.01, 5.99 and 6.02, and the bore
+   * that a rib interrupts comes back as two bores on axes a hundredth of a
+   * millimetre apart. Every one of those is within tolerance and every one of
+   * them is wrong, because nobody drew them that way. Open that in a modeller
+   * and there is nothing to grab: the faces are not parallel, so they will not
+   * stay parallel; the holes are not one size, so changing the size changes one
+   * of them.
+   *
+   * This is the pass that puts it back, and it is the one Fusion is doing when
+   * its answer comes out looking drawn rather than measured. Three questions,
+   * in order, because each depends on the last:
+   *
+   *   Do these face the same way?     — one direction, and squared where the
+   *                                     directions are nearly at right angles
+   *   Do these turn about one line?   — one axis, so bores are concentric
+   *   Are these the same size?        — one radius
+   *
+   * Nothing is ever forced. Each surface is turned, moved or resized, and then
+   * the facets it has to hold are measured against it: if any of them is now
+   * further off than the tolerance allows, the change is dropped and that
+   * surface keeps what it had. So a constraint is only ever applied where the
+   * part was already telling us it was true.
+   */
+  var MOST_TURN = Math.PI / 180;   // the furthest a constraint will turn anything
+
+  function align(surfaces, tolerance) {
+    var P = root.PrismaticPrimitives;
+    var made = { squared: 0, concentric: 0, sized: 0 };
+
+    var each = [];
+    surfaces.forEach(function (it) {
+      var dir = P.builtAround(it.surface);
+      if (!dir || it.seats.length < 3) return;
+      var extent = spanOf(it.points);
+      it.dir = dir;
+      it.extent = extent;
+      // How much this surface's own direction is worth. A wide face pins its
+      // normal down far better than a narrow one does, and the consensus
+      // should be theirs rather than everybody's equally.
+      it.power = it.area * Math.max(extent, tolerance);
+      // And how far it could be turned before anybody could tell: a face of
+      // extent L moves its far edge by L.theta/2, so the tolerance buys
+      // 2.tol/L of angle. This is what "nearly parallel" means here — it is
+      // measured off the part rather than picked.
+      //
+      // Except at the top, where it is picked, and has to be. A facet a
+      // millimetre across can be swung five degrees for a twentieth of a
+      // millimetre, so measuring alone would let every scrap of a ball agree
+      // with every other scrap and turn the ball into a faceted mess — which
+      // is exactly what it did. "Parallel" is a claim about direction, not
+      // about how much room the small ones have: nobody draws two faces a
+      // degree apart and means them to be parallel. So a degree is the most
+      // any constraint here will move anything.
+      it.theta = Math.min(MOST_TURN, 2 * tolerance / Math.max(extent, tolerance));
+      each.push(it);
+    });
+    if (each.length < 2) return made;
+    each.sort(function (a, b) { return b.power - a.power; });
+
+    /** Try a surface on a group, and keep it only if the facets still hold. */
+    function put(item, surface) {
+      if (!surface) return false;
+      var gap = P.deviation(surface, item.points);
+      if (!(gap <= tolerance)) return false;
+      surface.deviation = gap;
+      item.set(surface);
+      item.surface = surface;
+      item.dir = P.builtAround(surface) || item.dir;
+      return true;
+    }
+
+    // ---- one direction where there was nearly one -------------------------
+    var clusters = [];
+    each.forEach(function (it) {
+      for (var c = 0; c < clusters.length; c++) {
+        var away = Math.acos(Math.min(1, Math.abs(dot3(clusters[c].dir, it.dir))));
+        if (away <= it.theta + clusters[c].theta) {
+          clusters[c].members.push(it);
+          clusters[c].power += it.power;
+          return;
+        }
+      }
+      clusters.push({ dir: it.dir, theta: it.theta, members: [it], power: it.power });
+    });
+
+    var SQUARE = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    clusters.forEach(function (c) {
+      if (c.members.length > 1) {
+        var v = [0, 0, 0];
+        c.members.forEach(function (m) {
+          var sign = dot3(m.dir, c.dir) < 0 ? -1 : 1;
+          for (var k = 0; k < 3; k++) v[k] += sign * m.dir[k] * m.power;
+        });
+        var mean = unit3(v);
+        if (mean) c.dir = mean;
+      }
+      // And if that direction is one of the world's own, say so exactly. The
+      // rebuild squares the mesh where it can; this squares what was found on
+      // it, which is not the same thing and is what a modeller sees.
+      for (var a = 0; a < 3; a++) {
+        if (Math.acos(Math.min(1, Math.abs(dot3(c.dir, SQUARE[a])))) <= c.theta) {
+          c.dir = dot3(c.dir, SQUARE[a]) < 0
+            ? [-SQUARE[a][0], -SQUARE[a][1], -SQUARE[a][2]] : SQUARE[a];
+        }
+      }
+    });
+
+    // ---- and squared, where they were nearly square -----------------------
+    clusters.sort(function (a, b) { return b.power - a.power; });
+    var frame = [];
+    clusters.forEach(function (c) {
+      var v = [c.dir[0], c.dir[1], c.dir[2]], square = false;
+      for (var f = 0; f < frame.length; f++) {
+        var lean = dot3(v, frame[f]);
+        if (Math.abs(lean) > Math.sin(c.theta)) continue;      // not near square
+        v = [v[0] - lean * frame[f][0], v[1] - lean * frame[f][1], v[2] - lean * frame[f][2]];
+        square = true;
+      }
+      var made2 = unit3(v);
+      if (made2 && square) c.dir = made2;
+      if (frame.length < 3) {
+        var fits = true;
+        for (var g = 0; g < frame.length; g++) {
+          if (Math.abs(dot3(c.dir, frame[g])) > 1e-6) fits = false;
+        }
+        if (fits) frame.push(c.dir);
+      }
+    });
+
+    // How far apart two directions are, measured as the sine rather than the
+    // cosine. A tenth of a microradian off square reads as a dot product of
+    // one to fifteen figures — asking "is this already parallel" in cosines
+    // answers yes to everything, and the answer that matters is the angle.
+    function apart(a, b) {
+      var c = cross3(a, b);
+      return Math.sqrt(dot3(c, c));
+    }
+
+    clusters.forEach(function (c) {
+      c.members.forEach(function (m) {
+        if (apart(m.dir, c.dir) < 1e-12) return;
+        if (put(m, P.reseat(m.surface, c.dir, m.seats))) made.squared++;
+      });
+    });
+
+    // ---- one line to turn about -------------------------------------------
+    clusters.forEach(function (c) {
+      var turning = c.members.filter(function (m) {
+        return m.surface.type !== 'plane' && m.surface.type !== 'sphere';
+      });
+      if (turning.length < 2) return;
+      var lines = [];
+      turning.forEach(function (m) {
+        var at = m.surface.type === 'cylinder' ? m.surface.point
+          : m.surface.type === 'cone' ? m.surface.apex : m.surface.centre;
+        var flat = across3(at, c.dir);
+        for (var l = 0; l < lines.length; l++) {
+          if (gap3(lines[l].at, flat) <= tolerance) {
+            lines[l].members.push(m);
+            lines[l].power += m.power;
+            for (var k = 0; k < 3; k++) lines[l].sum[k] += flat[k] * m.power;
+            return;
+          }
+        }
+        lines.push({ at: flat, sum: [flat[0] * m.power, flat[1] * m.power, flat[2] * m.power],
+                     power: m.power, members: [m] });
+      });
+      lines.forEach(function (l) {
+        if (l.members.length < 2) return;
+        var at = [l.sum[0] / l.power, l.sum[1] / l.power, l.sum[2] / l.power];
+        l.members.forEach(function (m) {
+          var s = m.surface;
+          var mine = across3(s.type === 'cylinder' ? s.point
+            : s.type === 'cone' ? s.apex : s.centre, c.dir);
+          if (gap3(mine, at) < 1e-12) return;
+          if (put(m, P.recentre(s, { at: at, dir: c.dir }, m.seats))) made.concentric++;
+        });
+      });
+    });
+
+    // ---- and one size ------------------------------------------------------
+    // Across the whole part, not just within one axis: four holes drilled at
+    // six millimetres are six millimetres wherever they point. What counts as
+    // "the same" is each fit's own error — two radii that differ by less than
+    // the distance their own facets already sit off them are not two radii,
+    // they are one measured twice.
+    var sizes = {};
+    surfaces.forEach(function (m) {
+      var r = P.sizeOf(m.surface);
+      if (!(r > 0) || m.seats.length < 3) return;
+      (sizes[m.surface.type] || (sizes[m.surface.type] = [])).push(m);
+    });
+    Object.keys(sizes).forEach(function (kind) {
+      var list = sizes[kind].slice().sort(function (a, b) {
+        return P.sizeOf(a.surface) - P.sizeOf(b.surface);
+      });
+      var runs = [];
+      list.forEach(function (m) {
+        var r = P.sizeOf(m.surface);
+        var bar = Math.max(m.surface.deviation || 0, tolerance * 0.05);
+        var last = runs[runs.length - 1];
+        if (last && r - last.last <= bar + last.bar) {
+          last.members.push(m); last.sum += r * m.power; last.power += m.power;
+          last.last = r; last.bar = bar;
+          return;
+        }
+        runs.push({ members: [m], sum: r * m.power, power: m.power, last: r, bar: bar });
+      });
+      runs.forEach(function (run) {
+        if (run.members.length < 2) return;
+        var r = run.sum / run.power;
+        run.members.forEach(function (m) {
+          if (Math.abs(P.sizeOf(m.surface) - r) < 1e-12) return;
+          if (put(m, P.resize(m.surface, r))) made.sized++;
+        });
+      });
+    });
+
+    return made;
+  }
+
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function cross3(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+  function unit3(v) {
+    var len = Math.sqrt(dot3(v, v));
+    return len > 1e-12 ? [v[0] / len, v[1] / len, v[2] / len] : null;
+  }
+  /** The part of a point that is across a direction: which line it is on. */
+  function across3(p, a) {
+    var t = dot3(p, a);
+    return [p[0] - t * a[0], p[1] - t * a[1], p[2] - t * a[2]];
+  }
+  function gap3(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
+
+  /**
+   * Where a face that was never grouped is judged: its corners, and the middle
+   * of each of its edges. The same question the recognition asks of a group,
+   * asked of one face, because the constraint pass has to hold both to the
+   * same standard.
+   */
+  function pointsOn(brep, face) {
+    var seats = [], points = [];
+    face.loops.forEach(function (loop) {
+      for (var i = 0; i < loop.length; i++) {
+        var a = vertexAt(brep, loop[i]), b = vertexAt(brep, loop[(i + 1) % loop.length]);
+        seats.push(a);
+        points.push(a, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+      }
+    });
+    return { points: points, seats: seats };
+  }
+
+  /** How far apart the two furthest of these points are, roughly: the box round them. */
+  function spanOf(points) {
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < points.length; i++) {
+      for (var k = 0; k < 3; k++) {
+        if (points[i][k] < lo[k]) lo[k] = points[i][k];
+        if (points[i][k] > hi[k]) hi[k] = points[i][k];
+      }
+    }
+    if (!isFinite(lo[0])) return 0;
+    return Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
   }
 
   /**
@@ -1116,17 +1407,54 @@
 
     var vertices = brep.vertices;
     var seams = [];
+
+    // Every surface the body is going to have, recognised or not, offered to
+    // the constraint pass together. Not just the recognised ones: most of a
+    // part's planes come through the rebuild one facet at a time, and "these
+    // two walls are parallel" is a statement about those more than about
+    // anything that was recognised.
+    var flats = new Array(brep.faces.length);
+    brep.faces.forEach(function (face, f) {
+      if (found.taken[f] >= 0) return;
+      flats[f] = { type: 'plane', x: face.x, y: face.y, z: face.z, d: face.d };
+    });
+    var everything = [];
+    found.groups.forEach(function (group) {
+      if (!group.members.length || !group.surface) return;
+      everything.push({
+        surface: group.surface, points: thin(group.points), seats: thin(group.seats),
+        area: group.group.weight,
+        set: function (s) { group.surface = s; }
+      });
+    });
+    brep.faces.forEach(function (face, f) {
+      if (!flats[f] || (found.curved && found.curved[f])) return;
+      var on = pointsOn(brep, face);
+      everything.push({
+        surface: flats[f], points: on.points, seats: on.seats,
+        area: Math.abs(planeArea(brep, face)),
+        set: function (s) { flats[f] = s; }
+      });
+    });
+    var constrained = o.align && o.recognise
+      ? align(everything, o.tolerance)
+      : { squared: 0, concentric: 0, sized: 0 };
+
     // How far the mesh itself had to move to become these surfaces. Not the
     // tolerance that was allowed — what was actually spent of it, which is
-    // usually a fraction and is the only honest way to price a setting.
+    // usually a fraction and is the only honest way to price a setting. The
+    // constraint pass spends some of it too, so it is read off the surfaces
+    // after that rather than before.
     var strain = 0;
+    everything.forEach(function (it) {
+      if (it.surface.deviation > strain) strain = it.surface.deviation;
+    });
 
     found.groups.forEach(function (group) {
       // A group dissolved for being too small to be a face has nothing left to
       // bound, and a surface with nothing to bound is not the same thing as a
       // surface that closes on itself.
       if (!group.members.length) return;
-      if (group.surface.deviation > strain) strain = group.surface.deviation;
       var loops = outlineOf(brep, brep.faces, group.members);
 
       // A surface with no boundary at all. A whole ball is one case and a whole
@@ -1175,7 +1503,7 @@
       if (found.taken[f] >= 0) return;
       counts.plane++;
       faces.push({
-        surface: { type: 'plane', x: face.x, y: face.y, z: face.z, d: face.d },
+        surface: flats[f],
         loops: face.loops,
         from: 1,
         // What this face contributes to the volume the body encloses, kept from
@@ -1248,6 +1576,11 @@
       // and a fitted cylinder is not exact the way a fitted plane is.
       slack: slackOf({ vertices: coordinates, edges: built.edges, faces: out }),
       strain: strain,
+      // What the constraint pass was able to say: how many surfaces were turned
+      // onto a shared direction, moved onto a shared axis, or given a shared
+      // size. Not decoration — it is the difference between a part somebody can
+      // edit and a very tidy scan.
+      aligned: constrained,
       counts: counts
     };
   }

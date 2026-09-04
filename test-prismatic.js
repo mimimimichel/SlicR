@@ -189,6 +189,46 @@ function drilled(w, d, h, r, sides) {
   return new Float32Array(out);
 }
 
+/**
+ * A plate with two holes of exactly the same size, meshed out of step with each
+ * other so that the two fits cannot come back identical by accident.
+ */
+function twinBores(w, d, h, r, sides, phase) {
+  var outer = [[0, 0], [w, 0], [w, d], [0, d]];
+  var flat = [], holes = [], rings = [];
+  outer.forEach(function (p) { flat.push(p[0], p[1]); });
+  [[w / 4, d / 2, 0], [3 * w / 4, d / 2, phase]].forEach(function (c) {
+    var ring = [];
+    for (var i = 0; i < sides; i++) {
+      var a = -2 * Math.PI * (i + c[2]) / sides;
+      ring.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]);
+    }
+    holes.push(flat.length / 2);
+    ring.forEach(function (p) { flat.push(p[0], p[1]); });
+    rings.push(ring);
+  });
+  var index = earcut(flat, holes, 2), out = [];
+  for (var k = 0; k < index.length; k += 3) {
+    var a0 = index[k] * 2, b0 = index[k + 1] * 2, c0 = index[k + 2] * 2;
+    out.push(flat[a0], flat[a0 + 1], h, flat[b0], flat[b0 + 1], h, flat[c0], flat[c0 + 1], h);
+    out.push(flat[a0], flat[a0 + 1], 0, flat[c0], flat[c0 + 1], 0, flat[b0], flat[b0 + 1], 0);
+  }
+  var corners = [[0, 0, 0], [w, 0, 0], [w, d, 0], [0, d, 0],
+                 [0, 0, h], [w, 0, h], [w, d, h], [0, d, h]];
+  quad(out, corners, 0, 1, 5, 4);
+  quad(out, corners, 1, 2, 6, 5);
+  quad(out, corners, 2, 3, 7, 6);
+  quad(out, corners, 3, 0, 4, 7);
+  rings.forEach(function (ring) {
+    for (var j = 0; j < sides; j++) {
+      var p0 = ring[j], p1 = ring[(j + 1) % sides];
+      quad(out, [[p0[0], p0[1], 0], [p1[0], p1[1], 0], [p1[0], p1[1], h], [p0[0], p0[1], h]],
+        0, 1, 2, 3);
+    }
+  });
+  return new Float32Array(out);
+}
+
 /** Turn the whole soup about Z, then X — a part that was not laid down square. */
 function rotate(positions, az, ax) {
   var out = new Float32Array(positions.length);
@@ -647,6 +687,72 @@ console.log('\n=== 12. what a setting actually cost, as opposed to what it allow
     bore.strain);
   ok('a body with nothing recognised in it has nothing to declare',
     Solid.build(holed.brep, { recognise: false }).strain === 0);
+}
+
+console.log('\n=== 13. saying that two surfaces are the same surface ===');
+{
+  // Everything up to here fits each surface on its own, from its own facets,
+  // which is why the answer reads as a measurement rather than as a drawing:
+  // two walls come back 89.99999 degrees apart and two holes drilled at one
+  // size come back at two sizes. Both are within tolerance and both are wrong,
+  // because nobody drew them that way — and in a modeller they are the
+  // difference between faces you can constrain and faces you cannot.
+  var square = function (body) {
+    var ns = body.faces.map(function (f) { return [f.surface.x, f.surface.y, f.surface.z]; });
+    var worst = 0;
+    for (var i = 0; i < ns.length; i++) {
+      for (var j = i + 1; j < ns.length; j++) {
+        var d = Math.abs(ns[i][0] * ns[j][0] + ns[i][1] * ns[j][1] + ns[i][2] * ns[j][2]);
+        worst = Math.max(worst, d < 0.5 ? d : 1 - d);
+      }
+    }
+    return worst;
+  };
+  var tilted = P.toSolid(rotate(roughen(box(20, 12, 8), 20, 12, 8, 0.02), 0.31, 0.17),
+    { deviation: 0.05, snapAxes: false });
+  var loose = Solid.build(tilted.brep, { tolerance: 0.2, align: false });
+  var held = Solid.build(tilted.brep, { tolerance: 0.2, align: true });
+  ok('a box that was not laid down square comes back six faces either way',
+    loose.faces.length === 6 && held.faces.length === 6);
+  ok('fitted one at a time they are only nearly square (' + square(loose).toExponential(1) + ')',
+    square(loose) > 1e-12, square(loose));
+  ok('and told they are square, they are exactly square (' + square(held).toExponential(1) + ')',
+    square(held) < 1e-12, square(held));
+  ok('which is six surfaces turned, and nothing else claimed',
+    held.aligned.squared === 6 && held.aligned.concentric === 0, JSON.stringify(held.aligned));
+
+  // Two holes drilled at one diameter, meshed out of step so that the two fits
+  // cannot agree by accident. A modeller changing that diameter expects to
+  // change both.
+  var twins = P.toSolid(twinBores(40, 20, 6, 4, 24, 0.5), { deviation: 0.02 });
+  var bores = function (body) {
+    return body.faces.filter(function (f) { return f.surface.type === 'cylinder'; })
+      .map(function (f) { return f.surface.radius; });
+  };
+  var apart = bores(Solid.build(twins.brep, { tolerance: 0.3, align: false }));
+  var one = Solid.build(twins.brep, { tolerance: 0.3, align: true });
+  var together = bores(one);
+  ok('two bores are found either way', apart.length === 2 && together.length === 2);
+  ok('fitted one at a time they are two sizes (' +
+    Math.abs(apart[0] - apart[1]).toExponential(1) + ' mm apart)',
+    Math.abs(apart[0] - apart[1]) > 1e-9, apart.join(' '));
+  ok('and told they are one size, they are the same number',
+    together[0] === together[1], together.join(' '));
+  ok('which is the size they were drilled at', near(together[0], 4, 1e-6), together[0]);
+  ok('and the constraint pass says so', one.aligned.sized === 2, JSON.stringify(one.aligned));
+
+  // The one it must not do. A tessellated ball is three hundred little planes
+  // whose directions are the mesh's own, and any two of them can be within a
+  // degree of each other by chance. Squaring those to one another is how a ball
+  // stops being a ball, so nothing is constrained on the strength of a facet
+  // that leans gently into its neighbours.
+  var ball = P.toSolid(sphere(32, 10), { deviation: 0.01 });
+  var round = Solid.build(ball.brep, { tolerance: 0.05, align: true });
+  ok('a ball is never squared to itself', round.aligned.squared === 0,
+    JSON.stringify(round.aligned));
+  ok('and nothing a constraint did puts the surfaces outside the tolerance',
+    round.strain <= 0.05 + 1e-12 && held.strain <= 0.2 + 1e-12,
+    round.strain + ' / ' + held.strain);
 }
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
