@@ -256,6 +256,14 @@
         // the way round, starting and ending at the same corner — it is the
         // only thing that says so.
         curve = put("CIRCLE(''," + '#' + placement(c.centre, c.axis) + ',' + num(c.radius) + ')');
+      } else if (edge.curve.type === 'ellipse') {
+        // A hole through a sloping face. Part 21 measures an ellipse from the
+        // same placement a circle uses, with the first semi-axis along the
+        // placement's own x — so the long one is handed in as the reference
+        // direction and the short one follows from it.
+        var e = edge.curve;
+        curve = put("ELLIPSE(''," + '#' + placement(e.centre, e.axis, e.major) +
+          ',' + num(e.a) + ',' + num(e.b) + ')');
       } else {
         var d = unit([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
         var along = put("VECTOR(''," + '#' + direction(d[0], d[1], d[2]) + ',1.)');
@@ -375,7 +383,9 @@
 
     var curves = { plane: 0, cylinder: 0, cone: 0, sphere: 0, torus: 0 };
     brep.faces.forEach(function (f) { curves[f.surface.type]++; });
-    var circles = brep.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
+    var circles = brep.edges.filter(function (e) {
+      return e.curve.type === 'circle' || e.curve.type === 'ellipse';
+    }).length;
 
     return {
       text: head.concat(lines).concat(['ENDSEC;', 'END-ISO-10303-21;', '']).join('\n'),

@@ -203,6 +203,16 @@ function solidOf(entities) {
       var place = placementOf(c.params[1]);
       return { type: 'circle', centre: place.at, axis: place.axis, radius: c.params[2] };
     }
+    if (c.name === 'ELLIPSE') {
+      // The long semi-axis runs along the placement's own x, and the short one
+      // along the y that follows from it. A hole through a sloping face.
+      var oval = placementOf(c.params[1]);
+      if (!oval.ref) { problems.push('an ellipse with no direction to measure from'); return null; }
+      return {
+        type: 'ellipse', centre: oval.at, axis: oval.axis, major: oval.ref,
+        a: c.params[2], b: c.params[3]
+      };
+    }
     problems.push('an edge on a ' + c.name);
     return null;
   }
@@ -338,6 +348,7 @@ function walkLoop(steps) {
   var out = [];
   steps.forEach(function (step) {
     if (step.geometry.type === 'line') { out.push(step.from); return; }
+    if (step.geometry.type === 'ellipse') { walkEllipse(step, out); return; }
     var c = step.geometry;
     var axis = step.forward ? c.axis : [-c.axis[0], -c.axis[1], -c.axis[2]];
     var u = unit(sub(step.from, c.centre));
@@ -356,6 +367,36 @@ function walkLoop(steps) {
     }
   });
   return out;
+}
+
+/**
+ * An ellipse, walked the way Part 21 parameterises one: the point at t is the
+ * centre plus a.cos(t) along the placement's x and b.sin(t) along its y, so the
+ * parameter of a corner is found by dividing each coordinate by its own
+ * semi-axis first. Reading it as an angle instead puts every sample in the
+ * wrong place, which on a squashed enough ellipse shows as a face that does not
+ * close.
+ */
+function walkEllipse(step, out) {
+  var c = step.geometry;
+  var axis = step.forward ? c.axis : [-c.axis[0], -c.axis[1], -c.axis[2]];
+  var u = c.major, v = cross(axis, u);
+  var param = function (p) {
+    var w = sub(p, c.centre);
+    return Math.atan2(dot(w, v) / c.b, dot(w, u) / c.a);
+  };
+  var from = param(step.from);
+  var span = param(step.to) - from;
+  while (span <= 1e-9) span += 2 * Math.PI;
+  var n = Math.max(2, Math.ceil(ROUND * span / (2 * Math.PI)));
+  for (var i = 0; i < n; i++) {
+    var t = from + span * i / n;
+    out.push([
+      c.centre[0] + c.a * u[0] * Math.cos(t) + c.b * v[0] * Math.sin(t),
+      c.centre[1] + c.a * u[1] * Math.cos(t) + c.b * v[1] * Math.sin(t),
+      c.centre[2] + c.a * u[2] * Math.cos(t) + c.b * v[2] * Math.sin(t)
+    ]);
+  }
 }
 
 /**
@@ -393,7 +434,10 @@ function tessellate(face) {
   }
 
   if ((s.type === 'cylinder' || s.type === 'cone') && rings.length === 2 &&
-      face.loops.every(function (l) { return l.steps.length === 1 && l.steps[0].geometry.type === 'circle'; })) {
+      face.loops.every(function (l) {
+        return l.steps.length === 1 &&
+          (l.steps[0].geometry.type === 'circle' || l.steps[0].geometry.type === 'ellipse');
+      })) {
     return tube(s, face.loops[0].steps[0].geometry, face.loops[1].steps[0].geometry);
   }
 
@@ -554,12 +598,26 @@ function tube(s, first, second) {
   var u = unit(cross(axis, Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
   var v = cross(axis, u);
   var out = [];
-  function on(circle, t) {
-    return [
-      circle.centre[0] + circle.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
-      circle.centre[1] + circle.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
-      circle.centre[2] + circle.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+  function on(ring, t) {
+    if (ring.type !== 'ellipse') {
+      return [
+        ring.centre[0] + ring.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
+        ring.centre[1] + ring.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
+        ring.centre[2] + ring.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+      ];
+    }
+    // An ellipse round a cylinder is the cylinder cut by a plane, so the point
+    // at this angle is the one on the cylinder there that is also on that
+    // plane: one division, no fitting.
+    var n = ring.axis;
+    var r = s.type === 'cylinder' ? s.radius : s.radius;
+    var side = [
+      s.at[0] + r * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
+      s.at[1] + r * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
+      s.at[2] + r * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
     ];
+    var z = (dot(n, ring.centre) - dot(n, side)) / dot(n, axis);
+    return [side[0] + axis[0] * z, side[1] + axis[1] * z, side[2] + axis[2] * z];
   }
   for (var i = 0; i < ROUND; i++) {
     var t0 = 2 * Math.PI * i / ROUND, t1 = 2 * Math.PI * (i + 1) / ROUND;
@@ -855,9 +913,22 @@ function frustum(sides, bottom, top, height) {
   return new Float32Array(out);
 }
 
-function recognised(positions, options) {
+function recognised(positions, options, tolerance) {
   return Solid.build(P.toSolid(positions, options).brep,
-    { tolerance: (options && options.deviation) || 0.05 });
+    { tolerance: tolerance || (options && options.deviation) || 0.05 });
+}
+
+/**
+ * The plate's top face tipped over, leaving the bore through it vertical. Every
+ * wall is still flat and the bore is still a cylinder; the only thing that
+ * changed is that the top of the hole is now an ellipse.
+ */
+function sloped(positions, h, lean) {
+  var out = new Float32Array(positions);
+  for (var i = 0; i < out.length; i += 3) {
+    if (Math.abs(out[i + 2] - h) < 1e-6) out[i + 2] = h + lean * out[i];
+  }
+  return out;
 }
 function circlesIn(body) {
   return body.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
@@ -918,6 +989,36 @@ console.log('\n=== what it recognises, and what it refuses to ===');
 
 check('bore-as-cylinder', drilled(40, 30, 5, 6, 32),
   (40 * 30 - Math.PI * 36) * 5);
+
+console.log('\n=== a hole through a face that slopes ===');
+{
+  // Tip the top of the plate and the top of the bore is no longer a circle. It
+  // is an ellipse — exactly one, of semi-axes r and r/cos — and either the file
+  // says so or the rim comes back as a ring of little straight edges. Part 21
+  // has an ELLIPSE and there is nothing to fit: the plane meets the axis at the
+  // middle of it, across the lean the cylinder is still its own radius wide,
+  // and along the lean it is stretched by the secant of the angle.
+  var lean = 0.4;
+  var body = recognised(sloped(drilled(40, 30, 8, 6, 64), 8, lean), { deviation: 0.02 }, 0.15);
+  ok('a plate with a sloping top and a bore is seven faces',
+    body.faces.length === 7 && body.counts.cylinder === 1, JSON.stringify(body.counts));
+  var kinds = body.edges.reduce(function (m, e) {
+    m[e.curve.type] = (m[e.curve.type] || 0) + 1; return m;
+  }, {});
+  ok('and fourteen edges: twelve straight, one circle, one ellipse',
+    body.edges.length === 14 && kinds.line === 12 && kinds.circle === 1 && kinds.ellipse === 1,
+    JSON.stringify(kinds));
+  var oval = body.edges.filter(function (e) { return e.curve.type === 'ellipse'; })[0].curve;
+  ok('the ellipse is the size the geometry says (' + oval.a.toFixed(4) + ' by ' +
+    oval.b.toFixed(4) + ')',
+    near(oval.a, 6 / Math.cos(Math.atan(lean)), 1e-6) && near(oval.b, 6, 1e-6),
+    oval.a + ' / ' + oval.b);
+}
+// Both the plate and the bore are centred at x = 20, so the sloping top adds
+// the same average height to each: what is left is a plate of 8 + 0.4 x 20 with
+// a round hole through it.
+check('sloping-top', sloped(drilled(40, 30, 8, 6, 64), 8, 0.4),
+  (40 * 30 - Math.PI * 36) * (8 + 0.4 * 20), { deviation: 0.02 }, false);
 check('taper', frustum(64, 12, 4, 20), Math.PI * 20 * (144 + 48 + 16) / 3);
 
 console.log('\n=== a ball, which nothing bounds ===');

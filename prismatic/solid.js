@@ -1156,6 +1156,13 @@
               axis: turning(pts, meet) < 0
                 ? [-meet.axis[0], -meet.axis[1], -meet.axis[2]] : meet.axis
             };
+          } else if (meet.type === 'ellipse') {
+            geometry = {
+              type: 'ellipse', centre: meet.centre, major: meet.major,
+              a: meet.a, b: meet.b,
+              axis: turning(pts, meet) < 0
+                ? [-meet.axis[0], -meet.axis[1], -meet.axis[2]] : meet.axis
+            };
           }
         }
       }
@@ -1602,14 +1609,19 @@
     });
 
     body.edges.forEach(function (edge) {
-      if (edge.curve.type !== 'circle') return;
       var c = edge.curve;
+      if (c.type !== 'circle' && c.type !== 'ellipse') return;
       [edge.a, edge.b].concat(edge.via).forEach(function (v) {
         var p = at(v);
-        var w = [p[0] - c.centre[0], p[1] - c.centre[1], p[2] - c.centre[2]];
-        var along = dot(w, c.axis);
-        var radial = Math.sqrt(Math.max(0, dot(w, w) - along * along));
-        var gap = Math.sqrt(along * along + (radial - c.radius) * (radial - c.radius));
+        var gap;
+        if (c.type === 'ellipse') {
+          gap = P.offEllipse(c, p);
+        } else {
+          var w = [p[0] - c.centre[0], p[1] - c.centre[1], p[2] - c.centre[2]];
+          var along = dot(w, c.axis);
+          var radial = Math.sqrt(Math.max(0, dot(w, w) - along * along));
+          gap = Math.sqrt(along * along + (radial - c.radius) * (radial - c.radius));
+        }
         if (gap > worst) worst = gap;
       });
     });

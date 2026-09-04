@@ -267,7 +267,7 @@ function sphereSTL(seg = 24, r = 10) {
   console.log('  ' + JSON.stringify(bore));
   ok('the bore is one cylinder, not thirty-two flats',
     bore['Solid faces'] === '6 planes, 1 cylinder', bore['Solid faces']);
-  ok('with a circle at each end', /2 of them circles/.test(bore['Solid edges'] || ''),
+  ok('with a circle at each end', /2 circles among them/.test(bore['Solid edges'] || ''),
     bore['Solid edges']);
   const [boreStep] = await Promise.all([page.waitForEvent('download'), page.click('#btn-step')]);
   const borePathOut = path.join(dir, boreStep.suggestedFilename());

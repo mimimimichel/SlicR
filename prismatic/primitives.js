@@ -1019,6 +1019,47 @@
     return null;
   }
 
+  /**
+   * A cylinder cut by a plane that is not square to it: an ellipse, exactly.
+   *
+   * This is the boundary of every hole drilled through a sloping face and of
+   * every tube cut on the mitre, and without it those come back as a hundred
+   * and forty little straight edges. The plane meets the axis at one point,
+   * which is the middle of it; across the lean the cylinder is still its own
+   * radius wide, and along the lean it is stretched by exactly the secant of
+   * the angle. Nothing to fit and nothing to solve.
+   *
+   * The two ends of the range are somebody else's: square to the axis it is a
+   * circle, and parallel to the axis it is two straight lines.
+   */
+  function cutCylinder(p, c) {
+    if (p.type !== 'plane' || c.type !== 'cylinder') return null;
+    var n = [p.x, p.y, p.z];
+    var lean = dot(n, c.axis);
+    if (Math.abs(lean) >= 0.9999 || Math.abs(lean) <= 0.01) return null;
+    var t = (p.d - dot(n, c.point)) / lean;
+    var minor = norm(cross(c.axis, n));
+    if (!minor) return null;
+    var major = norm(cross(n, minor));
+    if (!major) return null;
+    return {
+      type: 'ellipse',
+      centre: [c.point[0] + c.axis[0] * t, c.point[1] + c.axis[1] * t, c.point[2] + c.axis[2] * t],
+      axis: norm(n), major: major, a: c.radius / Math.abs(lean), b: c.radius
+    };
+  }
+
+  /** Where a point sits relative to an ellipse, and how far off it is. */
+  function offEllipse(e, p) {
+    var v = cross(e.axis, e.major);
+    var w = [p[0] - e.centre[0], p[1] - e.centre[1], p[2] - e.centre[2]];
+    var off = dot(w, e.axis);
+    var x = dot(w, e.major), y = dot(w, v);
+    var t = Math.atan2(y / e.b, x / e.a);
+    var dx = x - e.a * Math.cos(t), dy = y - e.b * Math.sin(t);
+    return Math.sqrt(dx * dx + dy * dy + off * off);
+  }
+
   function crossing(a, b, seed, tolerance) {
     if (!a || !b || !seed) return null;
     if (a.type === 'plane' && b.type === 'plane') {
@@ -1026,6 +1067,8 @@
       if (!run) return null;                       // parallel: they never meet
       return { type: 'line' };
     }
+    var cut = cutCylinder(a, b) || cutCylinder(b, a);
+    if (cut) return cut;
     var axis = sharedAxis(a, b, tolerance);
     if (!axis) return null;
     var on = pull([a, b], seed, 0);
@@ -1047,6 +1090,12 @@
       if (!d) return false;
       for (var i = 1; i < points.length - 1; i++) {
         if (offLine({ dir: d, at: a }, points[i]) > tolerance) return false;
+      }
+      return true;
+    }
+    if (curve.type === 'ellipse') {
+      for (var e = 0; e < points.length; e++) {
+        if (offEllipse(curve, points[e]) > tolerance) return false;
       }
       return true;
     }
@@ -1341,6 +1390,7 @@
     offset: offset,
     crossing: crossing,
     onCurve: onCurve,
+    offEllipse: offEllipse,
     pull: pull,
     deviation: deviation,
     eigen3: eigen3,

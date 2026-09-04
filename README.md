@@ -348,6 +348,16 @@ a line, and any two surfaces of revolution about the same axis cross in circles
 about it — a plane square to a bore, a shoulder on a shaft, a fillet running
 into a face, a ball seated in a socket. A plane *along* a bore crosses it in two
 straight lines rather than a circle, and is left alone rather than lied about.
+
+And a plane that is neither along a bore nor square to it crosses it in an
+**ellipse**, which is the top of every hole drilled through a sloping face and
+the end of every tube cut on the mitre. There is nothing to fit there either:
+the plane meets the axis at the middle of it, across the lean the cylinder is
+still its own radius wide, and along the lean it is stretched by exactly the
+secant of the angle. A plate whose top is tipped by 0.4 comes back as **seven
+faces and fourteen edges** — twelve straight, one circle, one ellipse of
+6.4622 by 6.0000 — where the rim of the hole would otherwise have been a ring of
+little straight pieces. Part 21 has an `ELLIPSE`, so that is what is written.
 The point on the curve is not solved for case by case either; it is a point of
 the boundary pulled onto both surfaces at once, which is the same solve that
 seats every corner.

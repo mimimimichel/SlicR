@@ -622,29 +622,37 @@
       return [body.vertices[id * 3], body.vertices[id * 3 + 1], body.vertices[id * 3 + 2]];
     };
     body.edges.forEach(function (edge) {
-      if (edge.curve.type !== 'circle') {
+      var round = edge.curve.type === 'circle' || edge.curve.type === 'ellipse';
+      if (!round) {
         var a = at(edge.a), b = at(edge.b);
         out.push(a[0], a[1], a[2], b[0], b[1], b[2]);
         return;
       }
       var c = edge.curve;
       var axis = c.axis;
-      var pick = Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-      var u = normalise([axis[1] * pick[2] - axis[2] * pick[1],
-                         axis[2] * pick[0] - axis[0] * pick[2],
-                         axis[0] * pick[1] - axis[1] * pick[0]]);
+      // An ellipse carries the direction its long axis runs in; a circle has no
+      // such direction and any one across it will do.
+      var u = c.major || null;
+      if (!u) {
+        var pick = Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        u = normalise([axis[1] * pick[2] - axis[2] * pick[1],
+                       axis[2] * pick[0] - axis[0] * pick[2],
+                       axis[0] * pick[1] - axis[1] * pick[0]]);
+      }
       var v = [axis[1] * u[2] - axis[2] * u[1], axis[2] * u[0] - axis[0] * u[2], axis[0] * u[1] - axis[1] * u[0]];
+      var wide = c.a !== undefined ? c.a : c.radius;
+      var tall = c.b !== undefined ? c.b : c.radius;
       var start = at(edge.a), end = at(edge.b);
-      var from = angleOf(start, c, u, v);
-      var span = edge.closed ? 2 * Math.PI : sweep(from, angleOf(end, c, u, v));
+      var from = angleOf(start, c, u, v, wide, tall);
+      var span = edge.closed ? 2 * Math.PI : sweep(from, angleOf(end, c, u, v, wide, tall));
       var steps = Math.max(6, Math.ceil(72 * Math.abs(span) / (2 * Math.PI)));
       var previous = null;
       for (var i = 0; i <= steps; i++) {
         var t = from + span * i / steps;
         var p = [
-          c.centre[0] + c.radius * (u[0] * Math.cos(t) + v[0] * Math.sin(t)),
-          c.centre[1] + c.radius * (u[1] * Math.cos(t) + v[1] * Math.sin(t)),
-          c.centre[2] + c.radius * (u[2] * Math.cos(t) + v[2] * Math.sin(t))
+          c.centre[0] + wide * u[0] * Math.cos(t) + tall * v[0] * Math.sin(t),
+          c.centre[1] + wide * u[1] * Math.cos(t) + tall * v[1] * Math.sin(t),
+          c.centre[2] + wide * u[2] * Math.cos(t) + tall * v[2] * Math.sin(t)
         ];
         if (previous) out.push(previous[0], previous[1], previous[2], p[0], p[1], p[2]);
         previous = p;
@@ -656,10 +664,16 @@
     var len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) || 1;
     return [v[0] / len, v[1] / len, v[2] / len];
   }
-  function angleOf(p, c, u, v) {
+  /**
+   * How far round the curve a point is — as the parameter, not as the angle,
+   * which for an ellipse are two different things. Dividing each coordinate by
+   * its own semi-axis first turns the ellipse back into the unit circle it is
+   * written as, and that is the number both this and Part 21 mean by t.
+   */
+  function angleOf(p, c, u, v, wide, tall) {
     var w = [p[0] - c.centre[0], p[1] - c.centre[1], p[2] - c.centre[2]];
-    return Math.atan2(w[0] * v[0] + w[1] * v[1] + w[2] * v[2],
-                      w[0] * u[0] + w[1] * u[1] + w[2] * u[2]);
+    return Math.atan2((w[0] * v[0] + w[1] * v[1] + w[2] * v[2]) / (tall || 1),
+                      (w[0] * u[0] + w[1] * u[1] + w[2] * u[2]) / (wide || 1));
   }
   function sweep(from, to) {
     var span = to - from;
@@ -733,8 +747,18 @@
     return said.length ? said.join(', ') : 'none';
   }
   function curves(body) {
-    var circles = body.edges.filter(function (e) { return e.curve.type === 'circle'; }).length;
-    return circles ? ', ' + count(circles) + ' of them circles' : '';
+    var round = 0, oval = 0;
+    body.edges.forEach(function (e) {
+      if (e.curve.type === 'circle') round++;
+      else if (e.curve.type === 'ellipse') oval++;
+    });
+    var said = [];
+    if (round) said.push(count(round) + ' circle' + (round === 1 ? '' : 's'));
+    // A hole through a face that slopes. Worth naming rather than folding in
+    // with the circles: it is the one people expect to come back as a hundred
+    // little straight edges, and it does not.
+    if (oval) said.push(count(oval) + ' ellipse' + (oval === 1 ? '' : 's'));
+    return said.length ? ', ' + said.join(' and ') + ' among them' : '';
   }
 
   function reset() {
